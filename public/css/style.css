@@ -371,3 +371,180 @@ textarea.inp{height:150px;padding:14px 20px;border-radius:26px;resize:vertical;l
 [data-style=classic] .tile.genre .tt{font-weight:800}
 [data-style=classic] .tg::after{background:var(--text2)}
 [data-style=classic] body:not(.playing) .pp .pp-i{transform:translateX(2px)}
+
+/* ══════════════════════════════════════════════
+   COLOUR THEMES — dark base (default)
+══════════════════════════════════════════════ */
+/* Rose / Pink */
+[data-theme=rose]{--accent:#f43f5e;--accent-rgb:244,63,94;--on-accent:#fff}
+/* Amber / Gold */
+[data-theme=amber]{--accent:#f59e0b;--accent-rgb:245,158,11;--on-accent:#000}
+/* Teal */
+[data-theme=teal]{--accent:#14b8a6;--accent-rgb:20,184,166;--on-accent:#000}
+/* Sky */
+[data-theme=sky]{--accent:#0ea5e9;--accent-rgb:14,165,233;--on-accent:#fff}
+/* Violet */
+[data-theme=violet]{--accent:#8b5cf6;--accent-rgb:139,92,246;--on-accent:#fff}
+/* Lime */
+[data-theme=lime]{--accent:#84cc16;--accent-rgb:132,204,22;--on-accent:#000}
+/* Slate */
+[data-theme=slate]{--accent:#94a3b8;--accent-rgb:148,163,184;--on-accent:#000}
+/* Mocha: already defined earlier */
+
+/* ══════════════════════════════════════════════
+   UI STYLE — WINDOWS 11 (Fluent / Mica)
+══════════════════════════════════════════════ */
+[data-style=win11]{
+  --r:8px; --font-d:'Segoe UI Variable',var(--font-b); --font-m:var(--font-b);
+  /* muted translucency like Mica */
+  --card:rgba(30,30,30,.82); --card2:rgba(40,40,40,.75); --line:rgba(255,255,255,.08);
+}
+[data-style=win11] body{
+  background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
+}
+[data-style=win11][data-theme=light] body{background:linear-gradient(135deg,#dce9f5 0%,#e8f0fa 50%,#cfddf0 100%);}
+[data-style=win11][data-theme=light]{--card:rgba(245,248,252,.88);--card2:rgba(235,242,250,.82);--line:rgba(0,0,0,.07);}
+[data-style=win11] .card{backdrop-filter:blur(32px) saturate(1.4);-webkit-backdrop-filter:blur(32px) saturate(1.4);}
+[data-style=win11] .player{border-radius:8px;backdrop-filter:blur(48px) saturate(1.6);-webkit-backdrop-filter:blur(48px) saturate(1.6);}
+[data-style=win11] .dm{display:none}
+[data-style=win11] .pp-i{display:block}
+[data-style=win11] .btn{border-radius:6px;text-transform:none;letter-spacing:0;font-weight:600;font-size:13px}
+[data-style=win11] .nav a{border-radius:6px;text-transform:none;letter-spacing:0}
+[data-style=win11] .nav a.on{background:rgba(var(--accent-rgb),.2);color:var(--accent)}
+[data-style=win11] .nav a.on::after{display:none}
+[data-style=win11] .chip{border-radius:6px;text-transform:none;letter-spacing:0}
+[data-style=win11] .chip.on{background:rgba(var(--accent-rgb),.2);color:var(--accent)}
+[data-style=win11] .tile{border-radius:10px}
+[data-style=win11] .tile .art,.art,.cover{border-radius:6px}
+[data-style=win11] .hero{border-radius:10px}
+[data-style=win11] .sheet{border-radius:10px}
+[data-style=win11] .searchbox{border-radius:6px}
+[data-style=win11] .inp{border-radius:6px}
+[data-style=win11] .tg{border-radius:4px}
+[data-style=win11] .tg::after{border-radius:3px}
+[data-style=win11] h1.ttl,[data-style=win11] h1.big,[data-style=win11] h2,[data-style=win11] h3,[data-style=win11] .logo{font-family:var(--font-b);letter-spacing:-.02em;font-weight:700}
+[data-style=win11] h1.big{font-size:clamp(40px,6vw,80px)}
+[data-style=win11] .logo-dots,[data-style=win11] .hero-dots,[data-style=win11] .art-d,[data-style=win11] .tile.genre::before{display:none}
+[data-style=win11] .logo::before{content:'';width:22px;height:22px;background:var(--accent);border-radius:4px}
+[data-style=win11] .ambient{display:none}
+[data-style=win11] .p-art .art{border-radius:8px;animation:none}
+[data-style=win11] .p-art .art::after{display:none}
+[data-style=win11] .pp{border-radius:6px;width:36px;height:36px}
+[data-style=win11] body.playing .pp{box-shadow:0 0 0 1px var(--accent) inset}
+[data-style=win11] .spl,.qi{border-radius:6px}
+[data-style=win11] .row{border-radius:4px}
+[data-style=win11] .eyebrow::before{display:none}
+[data-style=win11] .tile.genre{background:rgba(var(--accent-rgb),.18);border:1px solid rgba(var(--accent-rgb),.3)}
+[data-style=win11] .tile.genre .tt{font-weight:700}
+
+/* ══════════════════════════════════════════════
+   UI STYLE — macOS (Aqua / Big Sur feel)
+══════════════════════════════════════════════ */
+[data-style=macos]{
+  --r:16px; --font-d:-apple-system,BlinkMacSystemFont,'SF Pro Display',var(--font-b);
+  --font-m:-apple-system,BlinkMacSystemFont,'SF Pro Text',var(--font-b);
+}
+[data-style=macos] .dm{display:none}
+[data-style=macos] .pp-i{display:block}
+[data-style=macos] .player{border-radius:0;border-left:0;border-right:0;border-bottom:0;backdrop-filter:blur(40px) saturate(2);-webkit-backdrop-filter:blur(40px) saturate(2);}
+[data-style=macos] .app{bottom:78px}
+[data-style=macos] .player{height:78px}
+[data-style=macos] body{--player-h:78px}
+[data-style=macos] .sidebar{border-right:1px solid var(--line)}
+[data-style=macos] .nav a{border-radius:8px;text-transform:none;letter-spacing:0;font-weight:500;font-size:13px}
+[data-style=macos] .nav a.on{background:rgba(var(--accent-rgb),.15);color:var(--accent);font-weight:600}
+[data-style=macos] .nav a.on::after{display:none}
+[data-style=macos] h1.ttl,[data-style=macos] h1.big,[data-style=macos] h2,[data-style=macos] h3,[data-style=macos] .logo{font-family:var(--font-d);letter-spacing:-.03em;font-weight:700}
+[data-style=macos] h1.big{font-size:clamp(44px,7vw,90px)}
+[data-style=macos] .btn{border-radius:8px;text-transform:none;letter-spacing:0;font-weight:500;font-size:13px}
+[data-style=macos] .btn.acc,.btn.solid{border-radius:8px}
+[data-style=macos] .chip{border-radius:8px;text-transform:none;letter-spacing:0}
+[data-style=macos] .chip.on{background:rgba(var(--accent-rgb),.15);color:var(--accent);border-color:rgba(var(--accent-rgb),.3)}
+[data-style=macos] .logo-dots,[data-style=macos] .hero-dots,[data-style=macos] .art-d,[data-style=macos] .tile.genre::before{display:none}
+[data-style=macos] .logo::before{content:'';width:24px;height:24px;background:linear-gradient(145deg,var(--accent),color-mix(in srgb,var(--accent) 60%,#fff));border-radius:7px;box-shadow:0 2px 8px rgba(var(--accent-rgb),.5)}
+[data-style=macos] .tile{border-radius:14px}
+[data-style=macos] .tile .art,.tile .cover{border-radius:10px}
+[data-style=macos] .hero{border-radius:18px}
+[data-style=macos] .sheet{border-radius:16px}
+[data-style=macos] .pp{border-radius:50%;background:rgba(var(--accent-rgb),.15);color:var(--accent)}
+[data-style=macos] body.playing .pp{background:var(--accent);color:var(--on-accent);box-shadow:0 4px 20px rgba(var(--accent-rgb),.6)}
+[data-style=macos] .p-art .art{border-radius:10px;animation:none;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+[data-style=macos] .p-art .art::after{display:none}
+[data-style=macos] .tg{border-radius:999px}
+[data-style=macos] .sidebar{background:rgba(28,28,30,.85);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+[data-style=macos][data-theme=light] .sidebar{background:rgba(242,242,247,.85)}
+[data-style=macos] .tile.genre .tt{font-weight:700;font-size:18px}
+[data-style=macos] .dt{background:rgba(128,128,128,.25)}
+
+/* ══════════════════════════════════════════════
+   UI STYLE — GNOME / Linux (Adwaita vibe)
+══════════════════════════════════════════════ */
+[data-style=gnome]{
+  --r:14px; --font-d:'Cantarell','Noto Sans',var(--font-b); --font-m:var(--font-d);
+  --card:#242424; --card2:#2e2e2e; --line:rgba(255,255,255,.1);
+}
+[data-style=gnome][data-theme=light]{--card:#fafafa;--card2:#efefef;--line:rgba(0,0,0,.1);}
+[data-style=gnome] .dm{display:none}
+[data-style=gnome] .pp-i{display:block}
+[data-style=gnome] h1.ttl,[data-style=gnome] h1.big,[data-style=gnome] h2,[data-style=gnome] h3,[data-style=gnome] .logo{font-family:var(--font-d);letter-spacing:-.01em;font-weight:800}
+[data-style=gnome] .logo-dots,[data-style=gnome] .hero-dots,[data-style=gnome] .art-d,[data-style=gnome] .tile.genre::before{display:none}
+[data-style=gnome] .logo::before{content:'♫';font-size:20px;line-height:1}
+[data-style=gnome] .btn{border-radius:8px;text-transform:none;letter-spacing:0;font-weight:600;box-shadow:inset 0 -2px 0 rgba(0,0,0,.25)}
+[data-style=gnome] .btn.acc,.btn.solid{box-shadow:inset 0 -2px 0 rgba(0,0,0,.35),0 4px 14px rgba(var(--accent-rgb),.4)}
+[data-style=gnome] .nav a{border-radius:8px;text-transform:none;letter-spacing:0;font-weight:500}
+[data-style=gnome] .nav a.on{background:rgba(var(--accent-rgb),.18);color:var(--accent)}
+[data-style=gnome] .nav a.on::after{display:none}
+[data-style=gnome] .chip{border-radius:8px;text-transform:none;letter-spacing:0}
+[data-style=gnome] .chip.on{background:rgba(var(--accent-rgb),.18);color:var(--accent);border-color:transparent}
+[data-style=gnome] .tile{border-radius:18px}
+[data-style=gnome] .pp{border-radius:8px}
+[data-style=gnome] .player{border-radius:0;border:0;border-top:1px solid var(--line)}
+[data-style=gnome] .p-art .art{border-radius:10px;animation:none}
+[data-style=gnome] .p-art .art::after{display:none}
+[data-style=gnome] .hero{border-radius:22px}
+[data-style=gnome] .dt{height:6px;border-radius:6px;background:var(--card2)}
+[data-style=gnome] .dt i{background:var(--accent);border-radius:6px}
+[data-style=gnome] .ambient{opacity:.08}
+
+/* ══════════════════════════════════════════════
+   UI STYLE — Samsung One UI
+══════════════════════════════════════════════ */
+[data-style=oneui]{
+  --r:30px; --font-d:'SamsungOne','Noto Sans KR',var(--font-b); --font-m:var(--font-d);
+  --card:#1c1c1e; --card2:#2c2c2e; --line:rgba(255,255,255,.07);
+}
+[data-style=oneui][data-theme=light]{--bg:#f2f2f7;--card:#fff;--card2:#f2f2f7;--line:rgba(0,0,0,.08);--text:#1c1c1e;--text2:#636366;--text3:#aeaeb2;}
+[data-style=oneui] .dm{display:none}
+[data-style=oneui] .pp-i{display:block}
+[data-style=oneui] h1.ttl,[data-style=oneui] h1.big,[data-style=oneui] h2,[data-style=oneui] h3,[data-style=oneui] .logo{font-family:var(--font-d);letter-spacing:-.02em;font-weight:700}
+[data-style=oneui] h1.big{font-size:clamp(36px,5.5vw,72px);font-weight:300;letter-spacing:-.04em}
+[data-style=oneui] .logo-dots,[data-style=oneui] .hero-dots,[data-style=oneui] .art-d,[data-style=oneui] .tile.genre::before{display:none}
+[data-style=oneui] .logo::before{content:'';width:28px;height:28px;border-radius:50%;background:var(--accent)}
+[data-style=oneui] .btn{border-radius:999px;text-transform:none;letter-spacing:0;font-weight:600;font-size:14px;padding:12px 24px}
+[data-style=oneui] .btn.sm{padding:7px 16px;font-size:13px}
+[data-style=oneui] .nav a{border-radius:999px;text-transform:none;letter-spacing:0;font-weight:500;font-size:14px}
+[data-style=oneui] .nav a.on{background:rgba(var(--accent-rgb),.12);color:var(--accent)}
+[data-style=oneui] .nav a.on::after{display:none}
+[data-style=oneui] .chip{border-radius:999px;text-transform:none;letter-spacing:0;font-weight:600;padding:10px 22px}
+[data-style=oneui] .chip.on{background:rgba(var(--accent-rgb),.12);color:var(--accent);border-color:rgba(var(--accent-rgb),.3)}
+[data-style=oneui] .tile{border-radius:32px}
+[data-style=oneui] .tile .art,.tile .cover{border-radius:24px}
+[data-style=oneui] .hero{border-radius:44px;padding:44px}
+[data-style=oneui] .sheet{border-radius:40px;padding:32px}
+[data-style=oneui] .pp{border-radius:50%;width:64px;height:64px}
+[data-style=oneui] .ctl{gap:16px}
+[data-style=oneui] .player{border-radius:0;height:96px;border:0;border-top:1px solid var(--line)}
+[data-style=oneui] .p-art .art{border-radius:16px;animation:none;width:64px}
+[data-style=oneui] .p-art .art::after{display:none}
+[data-style=oneui] .tg{border-radius:999px;width:60px;height:34px}
+[data-style=oneui] .tg::after{width:24px;height:24px;left:5px;top:5px}
+[data-style=oneui] .tg.on::after{transform:translateX(26px)}
+[data-style=oneui] .row{border-radius:24px;padding:10px 14px}
+[data-style=oneui] .spl{border-radius:24px}
+[data-style=oneui] .dt{height:4px;border-radius:999px;background:rgba(128,128,128,.2)}
+[data-style=oneui] .dt i{border-radius:999px;background:var(--accent)}
+[data-style=oneui] .searchbox{border-radius:999px;height:50px}
+[data-style=oneui] .inp{border-radius:18px;height:50px}
+[data-style=oneui] .tile.genre .tt{font-size:22px;font-weight:300}
+[data-style=oneui] .np{border-radius:0}
+[data-style=oneui] .np-art .art{border-radius:44px}

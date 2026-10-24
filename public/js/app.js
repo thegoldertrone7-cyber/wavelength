@@ -54,8 +54,15 @@ let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => ap
 let toastT; const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800); };
 
 /* ═════════ theming ═════════ */
-const ACC = { nothing: { dark: '#d71921', light: '#d71921', mocha: '#cba6f7' }, classic: { dark: '#7c6af7', light: '#6c5ce7', mocha: '#cba6f7' } };
-const defAccent = () => (ACC[S.settings.style] || ACC.nothing)[S.settings.theme] || '#d71921';
+const ACC = {
+  nothing:{ dark:'#d71921',light:'#d71921',mocha:'#cba6f7',rose:'#f43f5e',amber:'#f59e0b',teal:'#14b8a6',sky:'#0ea5e9',violet:'#8b5cf6',lime:'#84cc16',slate:'#94a3b8' },
+  classic:{ dark:'#7c6af7',light:'#6c5ce7',mocha:'#cba6f7',rose:'#f43f5e',amber:'#f59e0b',teal:'#14b8a6',sky:'#0ea5e9',violet:'#8b5cf6',lime:'#84cc16',slate:'#94a3b8' },
+  win11:  { dark:'#0078d4',light:'#0078d4',mocha:'#cba6f7',rose:'#e3008c',amber:'#f59e0b',teal:'#038387',sky:'#0ea5e9',violet:'#8764b8',lime:'#498205',slate:'#69797e' },
+  macos:  { dark:'#007aff',light:'#007aff',mocha:'#cba6f7',rose:'#ff375f',amber:'#ff9f0a',teal:'#30d158',sky:'#32ade6',violet:'#bf5af2',lime:'#30d158',slate:'#636366' },
+  gnome:  { dark:'#3584e4',light:'#1c71d8',mocha:'#cba6f7',rose:'#e01b24',amber:'#e5a50a',teal:'#26a269',sky:'#29a7e0',violet:'#9141ac',lime:'#26a269',slate:'#77767b' },
+  oneui:  { dark:'#1259c3',light:'#1259c3',mocha:'#cba6f7',rose:'#f43f5e',amber:'#f59e0b',teal:'#14b8a6',sky:'#0ea5e9',violet:'#8b5cf6',lime:'#84cc16',slate:'#94a3b8' },
+};
+const defAccent = () => { const tbl=ACC[S.settings.style]||ACC.nothing; return tbl[S.settings.theme]||tbl.dark||'#d71921'; };
 const VC = { accent: '#d71921', dim: 'rgba(255,255,255,.17)' };
 function applyTheme() {
   const { theme, accent } = S.settings, root = document.documentElement;
@@ -85,7 +92,7 @@ function buildDm() {
 function setDm(playing) {
   const p = PAT[playing ? 'pause' : 'play'];
   $$('.dm circle').forEach(e => e.classList.toggle('on', p[e.dataset.r][e.dataset.c] === '#'));
-  $$('.pp-i').forEach(e => e.innerHTML = playing ? I.pauseS : I.playS);
+  $$('.pp-i').forEach(e => { e.innerHTML = playing ? I.pauseS : I.playS; });
 }
 
 /* ═════════ builders ═════════ */
@@ -202,8 +209,8 @@ function vSet() {
   const tg = (k, l, sub) => `<div class="line"><div><div class="l">${l}</div><div class="s">${sub}</div></div><button class="tg${s[k] ? ' on' : ''}" data-act="tg" data-k="${k}" aria-label="${l}"></button></div>`;
   return `<h1 class="ttl">Settings</h1><div class="set">
     <div class="box rise" style="--i:0"><h3>Appearance</h3><div class="chips">
-      ${[['nothing', 'Nothing OS'], ['classic', 'Classic']].map(([k, n]) => `<button class="chip${s.style === k ? ' on' : ''}" data-act="style" data-k="${k}">${n}</button>`).join('')}</div>
-      <div class="chips" style="margin-top:10px">${[['dark', 'Dark'], ['light', 'Light'], ['mocha', 'Catppuccin Mocha']].map(([k, n]) => `<button class="chip${s.theme === k ? ' on' : ''}" data-act="theme" data-k="${k}">${n}</button>`).join('')}</div>
+      ${[['nothing','Nothing OS'],['classic','Classic'],['win11','Windows 11'],['macos','macOS'],['gnome','Linux / GNOME'],['oneui','Samsung One UI']].map(([k,n])=>`<button class="chip${s.style===k?' on':''}" data-act="style" data-k="${k}">${n}</button>`).join('')}</div>
+      <div class="chips" style="margin-top:10px">${[['dark','Dark'],['light','Light'],['mocha','Catppuccin Mocha'],['rose','Rose'],['amber','Amber'],['teal','Teal'],['sky','Sky'],['violet','Violet'],['lime','Lime'],['slate','Slate']].map(([k,n])=>`<button class="chip${s.theme===k?' on':''}" data-act="theme" data-k="${k}">${n}</button>`).join('')}</div>
       <div class="sw">${sw.map(c => `<button style="background:${c}" class="${s.accent === c ? 'on' : ''}" data-act="accent" data-c="${c}" aria-label="Accent ${c}"></button>`).join('')}
       <input type="color" id="accent-pick" value="${s.accent || defAccent()}" title="Custom colour"><button class="btn sm" data-act="accent-reset">Reset</button></div></div>
     <div class="box rise" style="--i:1"><h3>Sound visualizer</h3>${tg('viz', 'Show in full-screen player', 'Reacts to the real audio, not a fake animation.')}
