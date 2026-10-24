@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# local config (contains Spotify client ID etc.)
+.env
+
+# app data: library, custom covers, downloads
+data/
+dist/
+
+# macOS / editor noise
+.DS_Store
+Thumbs.db
+*.log
