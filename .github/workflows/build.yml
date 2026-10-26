@@ -1,0 +1,174 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (used when release is enabled)'
+        required: false
+        default: '0.0.0-dev'
+      release:
+        description: 'Publish a GitHub release from this manual run'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    name: macOS DMG
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Build DMG (unsigned, universal)
+        run: npm run dist:mac -- --universal --config.mac.identity=null
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wavelength-macOS-DMG
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Build EXE
+        run: npm run dist:win
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wavelength-Windows-EXE
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux AppImage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libarchive-tools fakeroot rpm
+      - run: npm ci
+      - name: Build AppImage
+        run: npm run dist:linux -- --linux AppImage
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wavelength-Linux-AppImage
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  flatpak:
+    name: Linux Flatpak
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder elfutils
+      - run: npm ci
+      - name: Build Flatpak
+        run: bash scripts/build-flatpak.sh
+      - name: Upload Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wavelength-Linux-Flatpak
+          path: dist/*.flatpak
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: Build APK
+        run: bash scripts/build-android.sh
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wavelength-Android-APK
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish Release
+    needs: [mac, windows, linux, flatpak, android]
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: List release files
+        run: ls -lh release
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

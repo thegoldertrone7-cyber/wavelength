@@ -8,13 +8,17 @@
 const http = require('http'), fs = require('fs'), path = require('path'),
       os = require('os'), crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
-const { Readable, PassThrough } = require('stream');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
 const ROOT = __dirname,
       PUB  = path.join(ROOT, 'public'),
       DATA = process.env.WAVELENGTH_DATA || path.join(ROOT, 'data'),
-      COVERS = path.join(DATA, 'covers');
+      COVERS = path.join(DATA, 'covers'),
+      LOCAL_DIR = path.join(DATA, 'local');
+const VERSION = (() => { try { return require(path.join(ROOT, 'package.json')).version || ''; } catch { return ''; } })();
 fs.mkdirSync(COVERS, { recursive: true });
+fs.mkdirSync(LOCAL_DIR, { recursive: true });
 
 try {
   for (const l of fs.readFileSync(path.join(ROOT, '.env'), 'utf8').split(/\r?\n/)) {
@@ -26,15 +30,33 @@ try {
 const PORT   = +process.env.PORT  || 3000;
 const HOST   = process.env.HOST   || '127.0.0.1';
 const LOOPBACK = ['127.0.0.1','localhost','::1'].includes(HOST);
-const YTDLP  = process.env.YTDLP_PATH  || 'yt-dlp';
-const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
+const SYNC_PORT = +process.env.SYNC_PORT || (PORT < 65535 ? PORT + 1 : PORT - 1);
+const YTDLP   = process.env.YTDLP_PATH   || 'yt-dlp';
+const FFMPEG  = process.env.FFMPEG_PATH  || 'ffmpeg';
+const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe';
+
+// App-scoped yt-dlp patch: skip the "waiting out a pre-roll ad" sleep.
+// Lives beside server.js in dev and in Resources/ when packaged.
+const YTPATCH = [
+  path.join(ROOT, 'ytpatch'),
+  path.join(path.dirname(ROOT), 'ytpatch'),
+].find(p => fs.existsSync(path.join(p, 'sitecustomize.py')));
+const YT_ENV = YTPATCH
+  ? { ...process.env, PYTHONPATH: [YTPATCH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) }
+  : process.env;
+console.log(`[dl] ytpatch ${YTPATCH || 'off'}`);
 const REDIRECT = `http://127.0.0.1:${PORT}/callback`;
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const YTID = /^[A-Za-z0-9_-]{11}$/;
 
 /* ── utils ── */
 const readJSON  = (f,d) => { try { return JSON.parse(fs.readFileSync(path.join(DATA,f),'utf8')); } catch { return d; } };
-const writeJSON = (f,v) => { const p=path.join(DATA,f); fs.writeFileSync(p+'.tmp',JSON.stringify(v)); fs.renameSync(p+'.tmp',p); };
+const writeJSON = (f,v) => {
+  const p=path.join(DATA,f);
+  const tmp=p+'.'+process.pid+'.'+crypto.randomBytes(3).toString('hex')+'.tmp';
+  fs.writeFileSync(tmp,JSON.stringify(v));
+  fs.renameSync(tmp,p);
+};
 const httpErr   = (s,m) => Object.assign(new Error(m),{status:s});
 const json      = (res,v,s=200) => { res.writeHead(s,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(v)); };
 const safe      = s => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]/g,'_').replace(/^\./,'').trim();
@@ -57,7 +79,7 @@ const saveMatches = () => { clearTimeout(matchTimer); matchTimer=setTimeout(()=>
 /* ── yt-dlp ── */
 function ytdlp(args, {timeout=45000}={}) {
   return new Promise((ok,no) => {
-    const p = spawn(YTDLP, args, {stdio:['ignore','pipe','pipe']});
+    const p = spawn(YTDLP, args, {stdio:['ignore','pipe','pipe'], env: YT_ENV});
     let out='', err='';
     const t = setTimeout(()=>{ p.kill('SIGKILL'); no(new Error('yt-dlp timed out')); }, timeout);
     p.stdout.on('data', d=>out+=d);
@@ -75,9 +97,97 @@ async function limited(fn) {
 const lines  = out => out.split('\n').filter(Boolean).map(l=>{ try{return JSON.parse(l);}catch{return null;} }).filter(Boolean);
 const toTrack = j => ({ ytId:j.id, title:j.title||'Untitled', artist:(j.channel||j.uploader||'').replace(/ - Topic$/i,''), duration:Math.round(j.duration||0), art:`https://i.ytimg.com/vi/${j.id}/mqdefault.jpg` });
 
+/* Search results change slowly. Cache them briefly and coalesce identical
+   requests so typing, deleting, or reopening a search does not pay for the
+   same yt-dlp call twice. */
+const SEARCH_TTL = 10 * 60 * 1000;
+const SEARCH_MAX = 60;
+const searchCache = new Map();  // key -> { at, items }
+const searchJobs = new Map();   // key -> Promise
+
+function jsonAfter(html, marker) {
+  const at = html.indexOf(marker);
+  if (at < 0) return null;
+  const start = at + marker.length;
+  let depth = 0, str = false, esc = false;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (str) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') str = false;
+    } else if (c === '"') str = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) {
+      try { return JSON.parse(html.slice(start, i + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+function durationSeconds(value) {
+  const parts = String(value || '').split(':').map(Number);
+  if (!parts.length || parts.some(n => !Number.isFinite(n))) return 0;
+  return parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+/* YouTube's search page already contains everything we need. Reading its
+   initial JSON avoids launching Python and is usually several seconds faster
+   than yt-dlp; yt-dlp remains the fallback if YouTube changes the page. */
+async function fastSearch(q) {
+  const url = 'https://www.youtube.com/results?' + new URLSearchParams({ search_query: q, hl: 'en', gl: 'US' });
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!r.ok) throw new Error(`YouTube search answered ${r.status}`);
+  const html = await r.text();
+  const data = jsonAfter(html, 'var ytInitialData = ') || jsonAfter(html, 'window["ytInitialData"] = ');
+  if (!data) throw new Error('YouTube search markup changed');
+  const found = [];
+  const walk = o => {
+    if (!o || typeof o !== 'object' || found.length >= 15) return;
+    if (o.videoRenderer) {
+      const v = o.videoRenderer;
+      const title = (v.title?.runs || []).map(x => x.text || '').join('') || v.title?.simpleText || '';
+      const channel = (v.ownerText?.runs || v.longBylineText?.runs || [])[0]?.text || '';
+      const duration = durationSeconds(v.lengthText?.simpleText);
+      if (v.videoId && title && duration) {
+        found.push({ ytId: v.videoId, title, artist: channel.replace(/ - Topic$/i, ''), duration, art: `https://i.ytimg.com/vi/${v.videoId}/mqdefault.jpg` });
+      }
+    }
+    for (const value of Object.values(o)) walk(value);
+  };
+  walk(data);
+  if (found.length < 3) throw new Error('YouTube search returned no usable videos');
+  return found;
+}
+
 async function search(q) {
-  const out = await limited(()=>ytdlp(['--flat-playlist','-j','--no-warnings',`ytsearch15:${q}`]));
-  return lines(out).filter(j=>j.id&&j.duration).map(toTrack);
+  const key = q.toLowerCase().replace(/\s+/g, ' ').trim();
+  const hit = searchCache.get(key);
+  if (hit && Date.now() - hit.at < SEARCH_TTL) {
+    searchCache.delete(key); searchCache.set(key, hit); // LRU touch
+    return hit.items;
+  }
+  const running = searchJobs.get(key);
+  if (running) return running;
+  const job = fastSearch(q)
+    .catch(async () => {
+      const out = await limited(()=>ytdlp(['--flat-playlist','-j','--no-warnings',`ytsearch15:${q}`]));
+      return lines(out).filter(j => j.id && j.duration).map(toTrack);
+    })
+    .then(items => {
+      searchCache.delete(key); searchCache.set(key, { at: Date.now(), items });
+      while (searchCache.size > SEARCH_MAX) searchCache.delete(searchCache.keys().next().value);
+      return items;
+    })
+    .finally(() => searchJobs.delete(key));
+  searchJobs.set(key, job);
+  return job;
 }
 
 const BAD = /\b(live|cover|remix|karaoke|reaction|instrumental|sped up|slowed|nightcore|8d|tutorial|lesson|mashup)\b/i;
@@ -105,159 +215,1004 @@ async function related(id) {
   return lines(out).filter(j=>j.id&&j.id!==id&&j.duration).map(toTrack);
 }
 
-/* ════════════════════════════════════════════════
-   STREAMING — the big fix.
+/* ════════════════════════════════════════════════════════════
+   STREAMING — start playing while yt-dlp is still downloading.
 
-   Root causes of "stops after a few seconds":
-   1. YouTube CDN URLs expire in ~6 h AND are IP-pinned.
-      Old code cached them for 90 min which is fine, but it
-      also relied on the browser re-requesting with Range bytes
-      on seek/stall, and if that Range request hit an expired
-      or IP-rotated URL the whole thing 403'd → audio error →
-      skip.
-   2. No stall detection on the pipe: if the YouTube CDN hung
-      mid-transfer the pipe just sat silently until the browser
-      gave up.
-   3. One retry on 403/410 but no resume from byte offset.
+   yt-dlp writes the track directly to <data>/cache/<videoId>.<ext>
+   (--no-part). We serve that growing file over HTTP with a real
+   Content-Length (taken from yt-dlp's progress metadata) and
+   Range support, waiting for more bytes whenever the browser reads
+   past what has been downloaded so far.
 
-   Fix:
-   - Cache TTL dropped to 55 min (well inside the ~6 h window).
-   - On ANY 403/410/429 we flush the cache entry and re-resolve
-     before retrying, carrying the byte offset forward so the
-     browser never notices.
-   - Stall watchdog: if no bytes flow for STALL_MS ms we kill
-     the upstream and restart from current offset.
-   - We pipe through a PassThrough so we can watch byte flow.
-   - 3-attempt retry ladder with 800 ms back-off on each.
-   - Accept-Encoding stripped so CDN never sends compressed
-     data (breaks m4a parsing in some browsers).
-   - Connection: keep-alive on the upstream request.
-════════════════════════════════════════════════ */
-const STALL_MS  = 8000;   // declare a stall after 8 s of silence
-const CACHE_TTL = 55 * 60 * 1000;  // 55 min
+   Result: first audio in ~1-2 s instead of waiting for the whole
+   song, while still supporting duration, seeking and instant
+   replays from the cache.
 
-const urlCache = new Map();
-async function audioUrl(id, force=false) {
-  const c = urlCache.get(id);
-  if(!force && c && c.exp > Date.now()) return c.url;
-  urlCache.delete(id);
-  const out = await limited(()=>ytdlp(
-    ['-f','bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
-     '-g','--no-playlist','--no-warnings',
-     '--extractor-args','youtube:player_client=web,mweb',
-     `https://www.youtube.com/watch?v=${id}`],
-    {timeout:50000}
-  ));
-  const url = out.trim().split('\n')[0];
-  if(!url) throw httpErr(502,'No audio stream found');
-  urlCache.set(id,{ url, exp:Date.now()+CACHE_TTL });
-  return url;
+   The cache is capped (default 2 GB, override with
+   WAVELENGTH_CACHE_MB) and pruned least-recently-played first.
+   ════════════════════════════════════════════════════════════ */
+const CACHE_DIR = path.join(DATA, 'cache');
+fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+const AUDIO_EXTS = ['.m4a', '.webm', '.mp4', '.opus', '.ogg', '.aac'];
+const AUDIO_FMT = 'ba[ext=m4a]/ba[ext=webm]/b[ext=mp4]/b';
+const CACHE_LIMIT = Math.max(128, +(process.env.WAVELENGTH_CACHE_MB || 2048)) * 1024 * 1024;
+
+/* Small storage summary for Settings. Everything here is local and cheap to
+   inspect, so it can be refreshed after imports or cache clears. */
+function folderStats(dir) {
+  let bytes = 0, count = 0;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      try { bytes += fs.statSync(path.join(dir, entry.name)).size; count++; } catch {}
+    }
+  } catch {}
+  return { bytes, count };
+}
+function dataStats() {
+  const cache = folderStats(CACHE_DIR), covers = folderStats(COVERS), local = folderStats(LOCAL_DIR);
+  const data = folderStats(DATA);
+  return {
+    version: VERSION,
+    cacheBytes: cache.bytes, cacheCount: cache.count, cacheLimit: CACHE_LIMIT,
+    coverBytes: covers.bytes, coverCount: covers.count,
+    localBytes: local.bytes, localCount: local.count,
+    dataBytes: data.bytes, totalBytes: data.bytes + cache.bytes,
+    matchedCount: Object.keys(matches || {}).length, resolutionCount: resolutions.size
+  };
 }
 
-async function stream(req,res,id) {
-  let offset = 0;
-  // honour the browser's initial Range header
-  const rangeHdr = req.headers.range;
-  if(rangeHdr){ const m=rangeHdr.match(/bytes=(\d+)/); if(m) offset=+m[1]; }
+const AUDIO_MIME = {
+  '.m4a': 'audio/mp4',
+  '.alac': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+  '.webm': 'audio/webm',
+  '.opus': 'audio/ogg',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.mp3': 'audio/mpeg',
+  '.flac': 'audio/flac',
+  '.wav': 'audio/wav',
+  '.aiff': 'audio/aiff',
+  '.aif': 'audio/aiff',
+};
 
-  let closed = false;
-  req.on('close', ()=>{ closed=true; });
+/* ════════════════════════════════════════════════════════════
+   LOCAL LOSSLESS LIBRARY
 
-  for(let attempt=0; attempt<3; attempt++){
-    if(closed) return;
+   YouTube only offers lossy streams, so lossless playback comes
+   from the listener's own files. FLAC, WAV, AIFF, ALAC and other
+   audio files are copied into <data>/local, probed with ffprobe,
+   and served with normal byte-range support. The browser receives
+   the original file untouched — no transcoding.
+   ════════════════════════════════════════════════════════════ */
+const LOCAL_EXTS = new Set(['.flac', '.wav', '.aiff', '.aif', '.alac', '.m4a', '.mp3', '.ogg', '.oga', '.opus', '.aac', '.webm']);
+const LOCAL_INDEX_FILE = 'local-index.json';
+let localIndex = readJSON(LOCAL_INDEX_FILE, {});
+if (!localIndex || typeof localIndex !== 'object' || Array.isArray(localIndex)) localIndex = {};
+let localSaveT;
+
+function saveLocalIndex() {
+  clearTimeout(localSaveT);
+  localSaveT = setTimeout(() => {
+    try { writeJSON(LOCAL_INDEX_FILE, localIndex); } catch {}
+  }, 300);
+  localSaveT.unref?.();
+}
+
+const localHash = rel => crypto.createHash('sha1').update(rel).digest('hex').slice(0, 16);
+const localFormat = rel => path.extname(rel).slice(1).toUpperCase() || 'AUDIO';
+
+function walkLocal(dir, rel = '') {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const childRel = rel ? rel + '/' + entry.name : entry.name;
+    if (entry.isDirectory()) { out.push(...walkLocal(path.join(dir, entry.name), childRel)); continue; }
+    if (entry.isFile() && LOCAL_EXTS.has(path.extname(entry.name).toLowerCase())) out.push(childRel);
+  }
+  return out;
+}
+
+async function extractLocalCover(file, id, stamp) {
+  const name = `local-${id}-${stamp}.jpg`;
+  const dest = path.join(COVERS, name);
+  if (fs.existsSync(dest)) return '/covers/' + name;
+  await new Promise((ok, no) => {
+    execFile(FFMPEG, ['-v', 'error', '-y', '-i', file, '-map', '0:v:0', '-frames:v', '1', '-vf', 'scale=600:-1', dest],
+      { timeout: 25000 }, error => error ? no(error) : ok());
+  });
+  return '/covers/' + name;
+}
+
+function probeLocal(file, rel, stat) {
+  return new Promise((ok, no) => {
+    execFile(FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
+      { timeout: 25000, maxBuffer: 8 * 1024 * 1024 }, async (error, stdout) => {
+        if (error) return no(error);
+        try {
+          const info = JSON.parse(stdout || '{}');
+          const audio = (info.streams || []).find(stream => stream.codec_type === 'audio');
+          if (!audio) throw new Error('No audio stream in file');
+          const tags = {};
+          for (const source of [info.format && info.format.tags, audio.tags]) {
+            for (const [key, value] of Object.entries(source || {})) tags[key.toLowerCase()] = String(value);
+          }
+          const ext = path.extname(rel).toLowerCase();
+          const codec = String(audio.codec_name || '').toLowerCase();
+          const lossless = /^(flac|alac|wavpack|ape|truehd|mlp)$/.test(codec) || /^pcm_/.test(codec);
+          const bitDepth = +(audio.bits_per_raw_sample || audio.bits_per_sample || 0) || 0;
+          const sampleRate = +(audio.sample_rate || 0) || 0;
+          const duration = Math.round(+(info.format && info.format.duration || audio.duration || 0)) || 0;
+          const size = +(info.format && info.format.size || stat.size || 0) || 0;
+          const bitrate = +(info.format && info.format.bit_rate || audio.bit_rate || 0) || 0;
+          const localId = localHash(rel);
+          const title = tags.title || path.basename(rel, path.extname(rel)).replace(/^\d+[\s._-]+/, '').trim() || 'Untitled';
+          const artist = tags.artist || tags.album_artist || tags.creator || 'Unknown artist';
+          const hasArt = (info.streams || []).some(stream =>
+            stream.codec_type === 'video' && (stream.disposition && stream.disposition.attached_pic === 1));
+          let art = null;
+          if (hasArt) {
+            try { art = await extractLocalCover(file, localId, Math.floor(stat.mtimeMs || 0)); } catch {}
+          }
+          ok({
+            localId, title, artist,
+            album: tags.album || '', duration, art,
+            lossless, format: localFormat(rel), codec,
+            bitDepth, sampleRate, bitrate, size,
+            file: rel,
+          });
+        } catch (e) { no(e); }
+      });
+  });
+}
+
+async function localTracks(force = false) {
+  const files = walkLocal(LOCAL_DIR);
+  const seen = new Set();
+  const tracks = [];
+  let changed = false;
+  for (const rel of files) {
+    const file = path.join(LOCAL_DIR, rel);
+    let stat;
+    try { stat = fs.statSync(file); } catch { continue; }
+    seen.add(rel);
+    const cached = localIndex[rel];
+    if (!force && cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.track) {
+      tracks.push(cached.track);
+      continue;
+    }
     try {
-      const url = await audioUrl(id, attempt>0);
-      const upHdrs = {
-        'User-Agent': UA,
-        'Connection': 'keep-alive',
-        'Range': `bytes=${offset}-`,
-      };
-      // don't request compression — breaks audio in some browsers
-      upHdrs['Accept-Encoding'] = 'identity';
-
-      const up = await fetch(url, { headers:upHdrs });
-
-      // stale / rate-limited → retry with fresh URL after back-off
-      if(up.status===403||up.status===410||up.status===429){
-        urlCache.delete(id);
-        if(attempt<2){ await sleep(800*(attempt+1)); continue; }
-        throw httpErr(502,'YouTube refused the stream after 3 attempts — try again in a moment');
-      }
-      if(up.status!==200&&up.status!==206){
-        throw httpErr(502,`Unexpected upstream status ${up.status}`);
-      }
-
-      // only write headers on first attempt (or if not sent yet)
-      if(!res.headersSent){
-        const h = {
-          'Accept-Ranges':  'bytes',
-          'Content-Type':   up.headers.get('content-type')||'audio/mp4',
-          'Cache-Control':  'no-store',
-          'X-Accel-Buffering':'no',
-        };
-        const cl = up.headers.get('content-length');
-        const cr = up.headers.get('content-range');
-        if(cr) h['Content-Range'] = cr;
-        if(cl) h['Content-Length'] = cl;
-        res.writeHead(up.status, h);
-      }
-
-      // pipe through a PassThrough so we can watch bytes and detect stalls
-      const pt = new PassThrough();
-      const rs = Readable.fromWeb(up.body);
-
-      let stall = null, bytesThisWindow = 0;
-
-      const resetStall = () => {
-        clearTimeout(stall);
-        stall = setTimeout(()=>{
-          if(closed) return;
-          // stall detected — destroy upstream and retry from current offset
-          rs.destroy(); pt.destroy();
-        }, STALL_MS);
-      };
-
-      pt.on('data', chunk=>{
-        offset += chunk.length;
-        bytesThisWindow += chunk.length;
-        resetStall();
-        if(!res.write(chunk)){
-          // backpressure — pause source while drain
-          rs.pause();
-          pt.once('drain', ()=>rs.resume());
-        }
-      });
-
-      rs.on('error', ()=>{ clearTimeout(stall); pt.destroy(); });
-      pt.on('error', ()=>{ clearTimeout(stall); });
-
-      resetStall(); // kick off watchdog
-
-      await new Promise((ok,fail)=>{
-        rs.pipe(pt);
-        pt.on('end', ()=>{ clearTimeout(stall); ok('done'); });
-        pt.on('close', ()=>{ clearTimeout(stall); ok('close'); });
-        rs.on('error', e=>{ clearTimeout(stall); fail(e); });
-        req.on('close', ()=>{ clearTimeout(stall); rs.destroy(); ok('client-closed'); });
-      });
-
-      // if we get here cleanly, we're done
-      if(!res.writableEnded) res.end();
-      return;
-
-    } catch(e) {
-      if(closed){ if(!res.writableEnded) res.end(); return; }
-      if(attempt<2){
-        await sleep(800*(attempt+1));
-        continue; // retry from current offset
-      }
-      if(!res.headersSent) throw e;
-      // headers already sent — just close cleanly
-      if(!res.writableEnded) res.end();
-      return;
+      const track = await probeLocal(file, rel, stat);
+      localIndex[rel] = { mtimeMs: stat.mtimeMs, size: stat.size, track };
+      tracks.push(track);
+      changed = true;
+    } catch (e) {
+      console.warn(`[local] skipped ${rel}: ${e.message}`);
     }
   }
+  for (const rel of Object.keys(localIndex)) {
+    if (!seen.has(rel)) { delete localIndex[rel]; changed = true; }
+  }
+  if (changed) saveLocalIndex();
+  tracks.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+  return tracks;
 }
+
+function localEntry(id) {
+  for (const [rel, entry] of Object.entries(localIndex)) {
+    if (entry && entry.track && entry.track.localId === id) return { rel, ...entry };
+  }
+  return null;
+}
+
+async function receiveLocalFile(req) {
+  let name = '';
+  try { name = decodeURIComponent(String(req.headers['x-filename'] || '')); } catch {}
+  name = path.basename(String(name).replace(/\\/g, '/')).replace(/\u0000/g, '');
+  const ext = path.extname(name).toLowerCase();
+  if (!LOCAL_EXTS.has(ext)) throw httpErr(400, 'Use FLAC, WAV, AIFF, ALAC, M4A, MP3, OGG, Opus or AAC');
+  const length = +req.headers['content-length'] || 0;
+  if (length > 4 * 1024 * 1024 * 1024) throw httpErr(413, 'That file is too large');
+  req.setTimeout(0);
+
+  const base = safe(path.basename(name, ext)).slice(0, 120) || 'Local track';
+  let rel = base + ext, n = 2;
+  while (fs.existsSync(path.join(LOCAL_DIR, rel))) rel = `${base} (${n++})${ext}`;
+  const dest = path.join(LOCAL_DIR, rel);
+  const temp = path.join(LOCAL_DIR, '.upload-' + crypto.randomUUID() + '.part');
+
+  try {
+    await pipeline(req, fs.createWriteStream(temp, { flags: 'wx' }));
+    const stat = fs.statSync(temp);
+    if (stat.size < 512) throw httpErr(400, 'That file is empty or incomplete');
+    fs.renameSync(temp, dest);
+    const finalStat = fs.statSync(dest);
+    let track;
+    try { track = await probeLocal(dest, rel, finalStat); }
+    catch {
+      try { fs.unlinkSync(dest); } catch {}
+      throw httpErr(415, 'That file could not be read as audio');
+    }
+    localIndex[rel] = { mtimeMs: finalStat.mtimeMs, size: finalStat.size, track };
+    saveLocalIndex();
+    return track;
+  } catch (e) {
+    try { fs.unlinkSync(temp); } catch {}
+    throw e;
+  }
+}
+
+async function deleteLocalFile(id) {
+  const entry = localEntry(id);
+  if (!entry) throw httpErr(404, 'Local file not found');
+  try { fs.unlinkSync(path.join(LOCAL_DIR, entry.rel)); } catch {}
+  const art = entry.track && entry.track.art;
+  if (art && art.startsWith('/covers/')) {
+    try { fs.unlinkSync(path.join(COVERS, path.basename(art))); } catch {}
+  }
+  delete localIndex[entry.rel];
+  saveLocalIndex();
+  return { ok: true };
+}
+
+const downloadJobs = new Map();   // id -> live job
+const activeFiles = new Set();    // files currently being streamed
+
+/* ════════════════════════════════════════════════════════════
+   RESOLUTION CACHE — yt-dlp finds a direct audio URL, then the
+   browser streams ranges through our local proxy.
+
+   This is what makes seeking instant and avoids writing whole
+   songs to disk. The URL cache is persisted so a quick app
+   restart does not pay for another extraction. URLs expire, so
+   each entry gets a TTL and a 403 triggers one fresh resolve.
+   ════════════════════════════════════════════════════════════ */
+const RESOLVE_FILE = 'resolve-cache.json';
+const RESOLVE_MAX = 300;
+const RESOLVE_CONCURRENCY = 2;
+const RESOLVE_URL_TTL = 2 * 60 * 60 * 1000;
+const resolutions = new Map();    // ytId -> { url, headers, ext, mime, expiresAt, at }
+const resolveJobs = new Map();    // ytId -> { id, priority, promise, ok, no }
+const resolveQ = [];
+let resolveActive = 0;
+const ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 15) gzip';
+const VISIONOS_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+const VISIONOS_CLIENT = {
+  clientName: 'VISIONOS',
+  clientVersion: '1.02',
+  deviceMake: 'Apple',
+  deviceModel: 'RealityDevice17,1',
+  userAgent: VISIONOS_UA,
+  osName: 'visionOS',
+  osVersion: '26.5.23O471',
+  hl: 'en',
+  gl: 'US',
+};
+const STREAM_RANGE_CHUNK = 1024 * 1024;
+const RESOLVE_CACHE_VERSION = 2;
+let visitorData = '';
+let visitorAt = 0;
+let visitorPromise = null;
+
+async function getVisitorData(force = false) {
+  if (!force && visitorData && Date.now() - visitorAt < 6 * 60 * 60 * 1000) return visitorData;
+  if (!force && visitorPromise) return visitorPromise;
+  visitorPromise = (async () => {
+    const r = await fetch('https://youtubei.googleapis.com/youtubei/v1/visitor_id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': VISIONOS_UA },
+      body: JSON.stringify({ context: { client: VISIONOS_CLIENT } }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`YouTube visitor endpoint answered ${r.status}`);
+    const d = await r.json();
+    const value = d?.responseContext?.visitorData;
+    if (!value) throw new Error('YouTube did not return visitor data');
+    visitorData = String(value);
+    visitorAt = Date.now();
+    return visitorData;
+  })().finally(() => { visitorPromise = null; });
+  return visitorPromise;
+}
+
+function pickAudioFormat(formats, quality = 'best') {
+  const q = normQuality(quality);
+  const byBest = list => list.slice().sort((a, b) => (+b.bitrate || 0) - (+a.bitrate || 0));
+  const bySaver = list => list.slice().sort((a, b) => (+a.bitrate || 0) - (+b.bitrate || 0));
+  const m4a = formats.filter(f => /audio\/mp4/i.test(f.mimeType));
+  const webm = formats.filter(f => /audio\/webm/i.test(f.mimeType));
+  if (q === 'saver') {
+    // Prefer Opus/WebM for data saver: lower bitrate and no HE-AAC trouble.
+    return bySaver(webm.filter(f => (+f.bitrate || 0) <= 128000))[0]
+      || webm.find(f => f.itag === 250)
+      || bySaver(webm)[0]
+      || m4a.find(f => f.itag === 140)
+      || bySaver(m4a.filter(f => f.itag !== 139))[0]
+      || bySaver(formats)[0];
+  }
+  return byBest(webm)[0] || byBest(formats)[0] || byBest(m4a)[0];
+}
+const normQuality = value => value === 'saver' ? 'saver' : 'best';
+const resolutionKey = (id, quality) => id + ':' + normQuality(quality);
+const audioFormat = quality => normQuality(quality) === 'saver'
+  ? 'ba[ext=m4a][abr<=128]/ba[abr<=128]/ba[ext=m4a]/ba'
+  : AUDIO_FMT;
+
+const isAudioUrl = value => {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' && (u.hostname === 'googlevideo.com' || u.hostname.endsWith('.googlevideo.com'));
+  } catch { return false; }
+};
+
+const pickHeader = (headers, name) => {
+  if (!headers) return '';
+  const key = Object.keys(headers).find(k => k.toLowerCase() === name.toLowerCase());
+  return key ? String(headers[key] || '') : '';
+};
+
+function loadResolutions() {
+  const saved = readJSON(RESOLVE_FILE, {});
+  if (!saved || saved.__v !== RESOLVE_CACHE_VERSION) return;
+  const now = Date.now();
+  for (const [key, r] of Object.entries(saved || {})) {
+    if (key === '__v') continue;
+    const [id, savedQuality] = String(key).split(':');
+    const quality = normQuality(savedQuality);
+    if (!YTID.test(id) || !r || !isAudioUrl(r.url) || !(r.expiresAt > now + 30000)) continue;
+    r.quality = quality;
+    resolutions.set(resolutionKey(id, quality), r);
+  }
+  pruneResolutions();
+  if (resolutions.size) console.log(`[resolve] restored ${resolutions.size} cached URL(s)`);
+}
+let resolveSaveT;
+function saveResolutions() {
+  clearTimeout(resolveSaveT);
+  resolveSaveT = setTimeout(() => {
+    const out = { __v: RESOLVE_CACHE_VERSION };
+    for (const [id, r] of resolutions) out[id] = r;
+    try { writeJSON(RESOLVE_FILE, out); } catch {}
+  }, 400);
+  resolveSaveT.unref?.();
+}
+function pruneResolutions() {
+  if (resolutions.size <= RESOLVE_MAX) return;
+  [...resolutions.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0))
+    .slice(0, resolutions.size - RESOLVE_MAX).forEach(([id]) => resolutions.delete(id));
+}
+function invalidateResolution(id) {
+  resolutions.delete(id);
+  saveResolutions();
+}
+const validResolution = r => r && r.expiresAt - 30000 > Date.now();
+
+function resolutionFromInfo(id, j, quality = 'best') {
+  if (!j || !j.url) throw new Error('yt-dlp did not return an audio URL');
+  if (!isAudioUrl(j.url)) throw new Error('No direct audio stream available');
+  const ext = String(j.ext || 'm4a').replace(/^\./, '').toLowerCase();
+  if (!AUDIO_EXTS.includes('.' + ext)) throw new Error('Unsupported audio format');
+  const headers = {};
+  for (const name of ['User-Agent', 'Accept', 'Accept-Language', 'Referer', 'Origin']) {
+    const value = pickHeader(j.http_headers, name);
+    if (value) headers[name] = value;
+  }
+  let expiresAt = Date.now() + RESOLVE_URL_TTL;
+  try {
+    const expire = +(new URL(j.url).searchParams.get('expire') || 0);
+    if (expire) expiresAt = Math.min(expiresAt, expire * 1000 - 60000);
+  } catch {}
+  if (expiresAt <= Date.now()) expiresAt = Date.now() + 60000;
+  return {
+    id,
+    url: j.url,
+    headers,
+    ext,
+    mime: AUDIO_MIME['.' + ext] || 'audio/mp4',
+    duration: Math.round(+j.duration || 0),
+    title: String(j.title || ''),
+    quality: normQuality(quality),
+    bitrate: Math.round(+(j.abr || j.bitrate || 0)) || 0,
+    codec: String(j.acodec || ''),
+    expiresAt,
+    at: Date.now(),
+  };
+}
+
+/* YouTube's Android player endpoint returns direct, un-ciphered audio URLs
+   in well under a second. yt-dlp still handles matching and remains the
+   fallback, but normal playback no longer waits 10–15 seconds for Python
+   to start and extract a URL. */
+async function androidResolution(id, quality = 'best') {
+  const q = normQuality(quality);
+  const r = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': ANDROID_UA },
+    body: JSON.stringify({
+      context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 35, osName: 'Android', osVersion: '15', hl: 'en', gl: 'US' } },
+      videoId: id,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!r.ok) throw new Error(`YouTube player answered ${r.status}`);
+  const d = await r.json();
+  if (d?.playabilityStatus?.status !== 'OK') throw new Error(d?.playabilityStatus?.reason || 'Video is not playable');
+  const formats = (d.streamingData?.adaptiveFormats || []).filter(f => f && f.url && /^audio\//.test(String(f.mimeType || '')));
+  const m4a = formats.filter(f => /audio\/mp4/i.test(f.mimeType));
+  const byBest = list => list.slice().sort((a, b) => (+b.bitrate || 0) - (+a.bitrate || 0));
+  const bySaver = list => list.slice().sort((a, b) => (+a.bitrate || 0) - (+b.bitrate || 0));
+  const fmt = q === 'saver'
+    ? (formats.find(f => f.itag === 140)
+      || byBest(m4a.filter(f => (+f.bitrate || 0) <= 128000))[0]
+      || bySaver(m4a)[0]
+      || bySaver(formats)[0])
+    : (byBest(formats)[0] || byBest(m4a)[0]);
+  if (!fmt) throw new Error('No direct audio stream in player response');
+  const ext = /webm/i.test(fmt.mimeType) ? 'webm' : /mp4|m4a/i.test(fmt.mimeType) ? 'm4a' : 'm4a';
+  return resolutionFromInfo(id, {
+    url: fmt.url,
+    ext,
+    duration: +(d.videoDetails?.lengthSeconds || 0),
+    title: d.videoDetails?.title || '',
+    bitrate: +fmt.bitrate || 0,
+    acodec: fmt.mimeType,
+    http_headers: { 'User-Agent': ANDROID_UA, 'Accept': '*/*' },
+  }, q);
+}
+
+/* Plain ANDROID/IOS videoplayback URLs are now Proof-of-Origin gated: only
+   the first megabyte or so is readable, so later range requests get a 403.
+   VISIONOS still returns ordinary audio URLs with a visitor session and is
+   no longer dependent on signature deciphering. */
+async function visionosResolution(id, quality = 'best') {
+  const q = normQuality(quality);
+  let lastError = new Error('YouTube did not return an audio stream');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const vd = await getVisitorData(attempt > 0);
+      const r = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': VISIONOS_UA,
+          'X-Goog-Visitor-Id': vd,
+        },
+        body: JSON.stringify({
+          context: { client: { ...VISIONOS_CLIENT, visitorData: vd } },
+          videoId: id,
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) throw new Error(`YouTube player answered ${r.status}`);
+      const d = await r.json();
+      const status = d?.playabilityStatus?.status;
+      if (status !== 'OK') {
+        const reason = d?.playabilityStatus?.reason || 'Video is not playable';
+        if (attempt === 0 && /LOGIN_REQUIRED|bot|sign in/i.test(reason)) {
+          visitorData = '';
+          visitorAt = 0;
+          lastError = new Error(reason);
+          continue;
+        }
+        throw new Error(reason);
+      }
+      const formats = (d.streamingData?.adaptiveFormats || [])
+        .filter(f => f && f.url && /^audio\//.test(String(f.mimeType || '')));
+      const fmt = pickAudioFormat(formats, q);
+      if (!fmt) throw new Error('No direct audio stream in player response');
+      const ext = /webm/i.test(fmt.mimeType) ? 'webm' : 'm4a';
+      return resolutionFromInfo(id, {
+        url: fmt.url,
+        ext,
+        duration: +(d.videoDetails?.lengthSeconds || fmt.approxDurationMs / 1000 || 0),
+        title: d.videoDetails?.title || '',
+        bitrate: +fmt.bitrate || 0,
+        acodec: fmt.mimeType,
+        http_headers: { 'User-Agent': VISIONOS_UA, 'Accept': '*/*' },
+      }, q);
+    } catch (e) {
+      lastError = e;
+      if (attempt > 0) break;
+    }
+  }
+  throw lastError;
+}
+
+function pumpResolve() {
+  while (resolveActive < RESOLVE_CONCURRENCY && resolveQ.length) {
+    resolveQ.sort((a, b) => (b.priority === true) - (a.priority === true) || a.at - b.at);
+    const job = resolveQ.shift();
+    resolveActive++;
+    (async () => {
+      const t0 = Date.now();
+      try {
+        let r;
+        try {
+          r = await visionosResolution(job.id, job.quality);
+        } catch (visionError) {
+          console.warn(`[resolve] ${job.id} VISIONOS failed: ${visionError.message}`);
+          try {
+            r = await androidResolution(job.id, job.quality);
+          } catch {
+            const out = await ytdlp([
+              '-j', '--no-warnings', '--no-playlist',
+              '--socket-timeout', '15', '--retries', '2',
+              '-f', audioFormat(job.quality),
+              'https://www.youtube.com/watch?v=' + job.id,
+            ], { timeout: 60000 });
+            const j = lines(out).filter(x => x && x.url).pop();
+            r = resolutionFromInfo(job.id, j, job.quality);
+          }
+        }
+        resolutions.set(job.key, r); pruneResolutions(); saveResolutions();
+        console.log(`[resolve] ${job.id} ${job.quality} ${r.ext} ${r.bitrate ? Math.round(r.bitrate / 1000) + 'kbps' : ''} in ${Date.now() - t0}ms`);
+        job.ok({ ...r, cached: false });
+      } catch (e) {
+        console.warn(`[resolve] ${job.id} failed after ${Date.now() - t0}ms: ${e.message}`);
+        job.no(e);
+      } finally {
+        resolveActive--;
+        resolveJobs.delete(job.key);
+        pumpResolve();
+      }
+    })();
+  }
+}
+
+function resolveAudio(id, priority = false, force = false, quality = 'best') {
+  if (!YTID.test(id)) return Promise.reject(httpErr(400, 'Bad video id'));
+  const q = normQuality(quality), key = resolutionKey(id, q);
+  if (!force) {
+    const hit = resolutions.get(key);
+    if (validResolution(hit)) {
+      hit.at = Date.now();
+      return Promise.resolve({ ...hit, cached: true });
+    }
+  }
+  const running = resolveJobs.get(key);
+  if (running) {
+    if (priority) running.priority = true;
+    return running.promise;
+  }
+  const job = { id, quality: q, key, priority: priority === true, at: Date.now(), promise: null, ok: null, no: null };
+  job.promise = new Promise((ok, no) => { job.ok = ok; job.no = no; });
+  resolveJobs.set(key, job);
+  resolveQ.push(job);
+  pumpResolve();
+  return job.promise;
+}
+
+function upstreamHeaders(req, r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r.headers || {})) {
+    if (['user-agent', 'accept', 'accept-language', 'referer', 'origin'].includes(k.toLowerCase())) out[k] = v;
+  }
+  if (!pickHeader(out, 'user-agent')) out['User-Agent'] = UA;
+  out['Accept-Encoding'] = 'identity';
+  // googlevideo rejects open-ended ranges (`bytes=0-`) and requests without
+  // a range when `rqh=1`. Browsers open media with exactly those headers, so
+  // turn them into a bounded range and let the element ask for the next chunk.
+  const range = String(req.headers.range || '').trim();
+  const m = /^bytes=(\d+)-(\d*)$/.exec(range);
+  if (m) {
+    const start = +m[1];
+    const end = m[2] ? +m[2] : start + STREAM_RANGE_CHUNK - 1;
+    out.Range = `bytes=${start}-${end}`;
+  } else if (range) {
+    out.Range = range;
+  } else {
+    out.Range = `bytes=0-${STREAM_RANGE_CHUNK - 1}`;
+  }
+  return out;
+}
+
+async function proxyAudio(req, res, id, quality = 'best') {
+  const cached = cachedAudio(id);
+  if (cached) { serveCached(req, res, cached); return true; }
+
+  let r;
+  try { r = await resolveAudio(id, true, false, quality); }
+  catch (e) { console.warn(`[stream] ${id} resolve failed: ${e.message}`); return false; }
+  if (res.destroyed || res.writableEnded) return true;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (res.destroyed || req.destroyed) return true;
+    const ac = new AbortController();
+    const headTimer = setTimeout(() => ac.abort(), 25000);
+    let up;
+    try {
+      up = await fetch(r.url, {
+        method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+        headers: upstreamHeaders(req, r),
+        redirect: 'follow',
+        signal: ac.signal,
+      });
+      clearTimeout(headTimer);
+    } catch (e) {
+      clearTimeout(headTimer);
+      if (attempt === 0 && !res.destroyed) {
+        invalidateResolution(resolutionKey(id, quality));
+        try { r = await resolveAudio(id, true, true, quality); continue; } catch {}
+      }
+      console.warn(`[stream] ${id} upstream error: ${e.message}`);
+      return false;
+    }
+
+    if ((up.status === 403 || up.status === 410 || up.status === 404) && attempt === 0) {
+      try { await up.body?.cancel(); } catch {}
+      invalidateResolution(resolutionKey(id, quality));
+      try { r = await resolveAudio(id, true, true, quality); continue; } catch {}
+      return false;
+    }
+    if (!up.ok && up.status !== 416) {
+      console.warn(`[stream] ${id} upstream HTTP ${up.status}`);
+      try { await up.body?.cancel(); } catch {}
+      return false;
+    }
+
+    const headers = {
+      'Content-Type': up.headers.get('content-type') || r.mime,
+      'Accept-Ranges': up.headers.get('accept-ranges') || 'bytes',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+      'X-Wavelength-Stream': 'range',
+    };
+    for (const name of ['content-range', 'content-length', 'last-modified', 'etag']) {
+      const value = up.headers.get(name);
+      if (value) headers[name.replace(/(^|-)(\w)/g, (_, a, b) => a + b.toUpperCase())] = value;
+    }
+    res.writeHead(up.status, headers);
+    if (req.method === 'HEAD') { try { await up.body?.cancel(); } catch {} return true; }
+
+    const body = up.body ? Readable.fromWeb(up.body) : Readable.from([]);
+    const cleanup = () => { ac.abort(); body.destroy(); };
+    res.on('close', cleanup);
+    try { await pipeline(body, res); }
+    catch (e) { if (!res.destroyed) console.warn(`[stream] ${id} relay ended: ${e.message}`); }
+    finally { res.off('close', cleanup); }
+    return true;
+  }
+  return false;
+}
+
+loadResolutions();
+
+const fileSize = f => { try { return fs.statSync(f).size; } catch { return 0; } };
+const touch = f => { try { const n = new Date(); fs.utimesSync(f, n, n); } catch {} };
+
+function cachedAudio(id) {
+  for (const ext of AUDIO_EXTS) {
+    const f = path.join(CACHE_DIR, id + ext);
+    if (fileSize(f) > 8192) return f;
+  }
+  return null;
+}
+
+function findAudioFile(id) {
+  try {
+    const n = fs.readdirSync(CACHE_DIR).find(x => x.startsWith(id + '.') && !x.includes('.part.') && AUDIO_EXTS.includes(path.extname(x).toLowerCase()));
+    return n ? path.join(CACHE_DIR, n) : null;
+  } catch { return null; }
+}
+
+function pruneCache() {
+  try {
+    const files = [];
+    let total = 0;
+    for (const name of fs.readdirSync(CACHE_DIR)) {
+      if (!AUDIO_EXTS.includes(path.extname(name).toLowerCase())) continue;
+      const f = path.join(CACHE_DIR, name), id = name.split('.')[0];
+      if (activeFiles.has(f) || downloadJobs.has(id)) continue;
+      let st; try { st = fs.statSync(f); } catch { continue; }
+      files.push({ f, size: st.size, mtime: st.mtimeMs });
+      total += st.size;
+    }
+    if (total <= CACHE_LIMIT) return;
+    files.sort((a, b) => a.mtime - b.mtime);
+    let removed = 0;
+    for (const item of files) {
+      if (total <= CACHE_LIMIT) break;
+      try { fs.unlinkSync(item.f); total -= item.size; removed++; } catch {}
+    }
+    if (removed) console.log(`[cache] pruned ${removed} track(s), now ${(total / 1048576).toFixed(0)} MB`);
+  } catch {}
+}
+
+function startDownload(id) {
+  const existing = downloadJobs.get(id);
+  if (existing) return existing;
+
+  const job = {
+    id, file: null, total: 0, downloaded: 0,
+    done: false, error: null, proc: null, started: Date.now(),
+  };
+  downloadJobs.set(id, job);
+  console.log(`[dl] ${id} start`);
+
+  const args = [
+    '-f', AUDIO_FMT,
+    '--no-playlist', '--no-warnings', '--newline',
+    '--no-part', '--fixup', 'never',
+    '--retries', '3', '--fragment-retries', '3',
+    '--progress-template', 'download:WLDL %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s',
+    '-o', path.join(CACHE_DIR, id + '.part.%(ext)s'),
+    'https://www.youtube.com/watch?v=' + id,
+  ];
+
+  let errBuf = '', buf = '';
+  const onLine = line => {
+    if (/Sleeping|Destination/.test(line)) console.log(`[dl] ${id} ${line.trim()}`);
+    let m = line.match(/\[download\] Destination:\s*(.+)$/);
+    if (m) { job.file = m[1].trim(); console.log(`[dl] ${id} file ${path.basename(job.file)}`); return; }
+    m = line.match(/^WLDL\s+(\d+|NA)\s+(\d+|NA)\s+(\d+|NA)/);
+    if (m) {
+      job.downloaded = +m[1] || 0;
+      const total = Math.max(+m[2] || 0, +m[3] || 0);
+      if (total && !job.total) console.log(`[dl] ${id} total ${total}`);
+      if (total) job.total = total;
+    }
+  };
+  const onChunk = d => {
+    buf += d;
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const l of lines) onLine(l);
+  };
+
+  const p = spawn(YTDLP, args, { stdio: ['ignore', 'pipe', 'pipe'], env: YT_ENV });
+  job.proc = p;
+  p.stdout.on('data', onChunk);
+  p.stderr.on('data', d => { errBuf += d; onChunk(d); });
+
+  p.on('error', e => {
+    job.error = new Error(e.code === 'ENOENT'
+      ? 'yt-dlp not found — install it with: brew install yt-dlp ffmpeg'
+      : e.message);
+    job.done = true;
+    downloadJobs.delete(id);
+  });
+
+  p.on('close', code => {
+    downloadJobs.delete(id);
+    if (!job.file) job.file = findAudioFile(id);
+
+    if (code === 0 && job.file && fileSize(job.file) > 8192) {
+      // Publish the completed file under its real name. Any stream that is
+      // already reading the partial keeps its open descriptor.
+      const final = path.join(CACHE_DIR, id + path.extname(job.file));
+      try {
+        if (job.file !== final) {
+          if (activeFiles.has(job.file)) { activeFiles.delete(job.file); activeFiles.add(final); }
+          fs.renameSync(job.file, final);
+          job.file = final;
+        }
+      } catch (e) { job.error = e; }
+      job.done = true;
+      job.total = Math.max(job.total, fileSize(job.file));
+      console.log(`[dl] ${id} done code=${code} bytes=${fileSize(job.file)}`);
+      if (!job.error) setTimeout(pruneCache, 50).unref?.();
+      return;
+    }
+
+    job.done = true;
+    job.error = new Error(errBuf.trim().split('\n').pop() || 'yt-dlp failed to download audio');
+    console.log(`[dl] ${id} failed code=${code} bytes=${job.file ? fileSize(job.file) : 0}: ${job.error.message}`);
+    // Keep a non-empty partial so the next attempt can resume it.
+    if (job.file && fileSize(job.file) === 0) { try { fs.unlinkSync(job.file); } catch {} }
+  });
+
+  return job;
+}
+
+function waitReady(job, timeout = 60000) {
+  return new Promise((ok, no) => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (job.error) return no(job.error);
+      if (job.file && fileSize(job.file) > 0) {
+        console.log(`[dl] ${job.id} ready after ${Date.now() - t0}ms size=${fileSize(job.file)} total=${job.total}`);
+        return ok(job);
+      }
+      if (job.done && (!job.file || fileSize(job.file) === 0)) {
+        return no(new Error('yt-dlp finished without producing audio'));
+      }
+      if (Date.now() - t0 > timeout) return no(new Error('Timed out waiting for YouTube'));
+      setTimeout(tick, 80);
+    };
+    tick();
+  });
+}
+
+function parseRange(req, total) {
+  let start = 0, end = total - 1, code = 200;
+  const h = req.headers.range;
+  if (h) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(String(h).trim());
+    if (m && (m[1] !== '' || m[2] !== '')) {
+      if (m[1] === '') start = Math.max(0, total - parseInt(m[2], 10));
+      else {
+        start = parseInt(m[1], 10);
+        end = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= total || start > end) return null;
+      code = 206;
+    }
+  }
+  return { start, end, code };
+}
+
+function audioHeaders(file, start, end, total, code) {
+  const h = {
+    'Content-Type': AUDIO_MIME[path.extname(file).toLowerCase()] || 'audio/mp4',
+    'Accept-Ranges': 'bytes',
+    'Content-Length': String(end - start + 1),
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+  };
+  if (code === 206) h['Content-Range'] = `bytes ${start}-${end}/${total}`;
+  return h;
+}
+
+function serveCached(req, res, file) {
+  const total = fileSize(file);
+  if (!total) return json(res, { error: 'Audio file missing' }, 404);
+  const r = parseRange(req, total);
+  if (!r) { res.writeHead(416, { 'Content-Range': 'bytes */' + total }); return res.end(); }
+
+  touch(file);
+  res.writeHead(r.code, audioHeaders(file, r.start, r.end, total, r.code));
+  if (req.method === 'HEAD') return res.end();
+
+  activeFiles.add(file);
+  const rs = fs.createReadStream(file, { start: r.start, end: r.end });
+  const cleanup = () => { activeFiles.delete(file); rs.destroy(); };
+  res.on('close', cleanup);
+  rs.on('error', () => { if (!res.writableEnded) res.end(); });
+  rs.on('end', () => activeFiles.delete(file));
+  rs.pipe(res);
+}
+
+async function* readGrowing(job, start, end) {
+  let pos = start, fd;
+  try { fd = await fs.promises.open(job.file, 'r'); } catch { return; }
+  try {
+    while (pos <= end) {
+      const size = fileSize(job.file);
+      if (pos < size) {
+        const len = Math.min(262144, end - pos + 1, size - pos);
+        const buf = Buffer.allocUnsafe(len);
+        let r;
+        try { r = await fd.read(buf, 0, len, pos); } catch { break; }
+        if (r.bytesRead) {
+          pos += r.bytesRead;
+          yield buf.subarray(0, r.bytesRead);
+          continue;
+        }
+      }
+      if (job.done || job.error) break;
+      await new Promise(r => setTimeout(r, 80));
+    }
+  } finally {
+    try { await fd.close(); } catch {}
+  }
+}
+
+function serveGrowing(req, res, job) {
+  const total = job.total || (job.done ? fileSize(job.file) : 0);
+  if (!total) return serveGrowingUnknown(req, res, job);
+
+  const r = parseRange(req, total);
+  if (!r) { res.writeHead(416, { 'Content-Range': 'bytes */' + total }); return res.end(); }
+
+  res.writeHead(r.code, audioHeaders(job.file, r.start, r.end, total, r.code));
+  if (req.method === 'HEAD') return res.end();
+
+  activeFiles.add(job.file);
+  const rs = Readable.from(readGrowing(job, r.start, r.end));
+  const cleanup = () => { activeFiles.delete(job.file); rs.destroy(); };
+  res.on('close', cleanup);
+  pipeline(rs, res)
+    .catch(() => {})
+    .finally(() => {
+      activeFiles.delete(job.file);
+      touch(job.file);
+      res.off('close', cleanup);
+      if (job.done) setTimeout(pruneCache, 50).unref?.();
+    });
+}
+
+function waitForComplete(job, timeout = 60000) {
+  return new Promise((ok, no) => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (job.error) return no(job.error);
+      if (job.done) return ok(job);
+      if (Date.now() - t0 > timeout) return no(new Error('Timed out waiting for download'));
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+
+/* Downloads whose total size is unknown until finished (HLS etc.) are sent
+   chunked. A seek before completion waits for the rest, then serves a range. */
+function serveGrowingUnknown(req, res, job) {
+  const h = req.headers.range && /^bytes=(\d+)-/.exec(String(req.headers.range).trim());
+  if (h && +h[1] > 0) {
+    waitForComplete(job).then(() => {
+      if (!res.destroyed) serveCached(req, res, job.file);
+    }).catch(e => {
+      if (!res.destroyed) json(res, { error: e.message || 'Download failed' }, 502);
+    });
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': AUDIO_MIME[path.extname(job.file).toLowerCase()] || 'audio/mp4',
+    'Accept-Ranges': 'none',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'Content-Type',
+  });
+  if (req.method === 'HEAD') return res.end();
+
+  activeFiles.add(job.file);
+  const rs = Readable.from(readGrowing(job, 0, Number.MAX_SAFE_INTEGER));
+  const cleanup = () => { activeFiles.delete(job.file); rs.destroy(); };
+  res.on('close', cleanup);
+  pipeline(rs, res)
+    .catch(() => {})
+    .finally(() => {
+      activeFiles.delete(job.file);
+      touch(job.file);
+      res.off('close', cleanup);
+      if (job.done) setTimeout(pruneCache, 50).unref?.();
+    });
+}
+
+async function streamDownload(req, res, id) {
+  const cached = cachedAudio(id);
+  if (cached) return serveCached(req, res, cached);
+
+  const job = startDownload(id);
+  try {
+    await waitReady(job);
+  } catch (e) {
+    if (res.destroyed) return;
+    return json(res, { error: e.message || 'Could not fetch audio' }, 502);
+  }
+  if (res.destroyed || res.writableEnded) return;
+  if (!job.file) return json(res, { error: 'Audio file missing' }, 502);
+
+  if (job.done) {
+    touch(job.file);
+    return serveCached(req, res, job.file);
+  }
+  serveGrowing(req, res, job);
+}
+
+async function stream(req, res, id, quality = 'best') {
+  // Normal path: stream ranges directly from YouTube. No full-song file.
+  // Fallback: the old growing-download path, used only when a direct URL
+  // cannot be resolved/relayed (HLS-only tracks, temporary errors, etc.).
+  let handled = false;
+  try { handled = await proxyAudio(req, res, id, quality); }
+  catch (e) { console.warn(`[stream] ${id} proxy error: ${e.message}`); }
+  if (handled || res.headersSent || res.destroyed) return;
+  return streamDownload(req, res, id);
+}
+
+// Keep the cache tidy, including leftovers from previous sessions.
+setTimeout(pruneCache, 10000).unref?.();
 
 /* ── downloads ── */
 const jobs=new Map(); let chain=Promise.resolve();
@@ -277,7 +1232,7 @@ function runDownload(job,o){
       '-o',path.join(config.downloadDir.replace(/%/g,'%%'),base+'.%(ext)s'),
       `https://www.youtube.com/watch?v=${o.ytId}`];
     job.status='downloading';
-    const p=spawn(YTDLP,args,{stdio:['ignore','pipe','pipe']});
+    const p=spawn(YTDLP,args,{stdio:['ignore','pipe','pipe'],env:YT_ENV});
     let err='';
     p.stdout.on('data',d=>{
       for(const l of String(d).split('\n')){
@@ -324,20 +1279,25 @@ function parseEmbed(html,kind,id){
 }
 async function spotifyPublic(url){
   let u;try{u=new URL(url);}catch{throw httpErr(400,"That doesn't look like a link");}
-  if(/(^|\.)spotify\.(link|app\.link)$/.test(u.hostname)||u.hostname.endsWith('.app.link')){
-    const r=await fetch(url,{redirect:'manual',headers:{'User-Agent':UA}});
-    const loc=r.headers.get('location');
-    if(!loc) throw httpErr(400,"Couldn't open that short link — paste the full open.spotify.com link");
-    u=new URL(loc,url);
+  try{
+    if(/(^|\.)spotify\.(link|app\.link)$/.test(u.hostname)||u.hostname.endsWith('.app.link')){
+      const r=await fetch(url,{redirect:'manual',headers:{'User-Agent':UA},signal:AbortSignal.timeout(12000)});
+      const loc=r.headers.get('location');
+      if(!loc) throw httpErr(400,"Couldn't open that short link — paste the full open.spotify.com link");
+      u=new URL(loc,url);
+    }
+    if(u.hostname!=='open.spotify.com') throw httpErr(400,'Paste a link from open.spotify.com (Share → Copy link)');
+    const m=u.pathname.match(/\/(playlist|album|track)\/([A-Za-z0-9]{10,40})/);
+    if(!m) throw httpErr(400,"That link isn't a playlist, album or song");
+    const r=await fetch(`https://open.spotify.com/embed/${m[1]}/${m[2]}`,{headers:{'User-Agent':UA,'Accept-Language':'en-US,en;q=0.9'},signal:AbortSignal.timeout(15000)});
+    if(!r.ok) throw httpErr(r.status===404?404:502,r.status===404?"Spotify can't find that. Make sure the playlist is public.":`Spotify answered with ${r.status}`);
+    const d=parseEmbed(await r.text(),m[1],m[2]);
+    if(!d.tracks.length) throw httpErr(422,"Couldn't read any songs from that link. It may be private, or use 'Paste a list of songs' instead.");
+    return d;
+  }catch(e){
+    if(e&&(e.name==='TimeoutError'||e.name==='AbortError')) throw httpErr(504,'Spotify took too long to answer. Try again.');
+    throw e;
   }
-  if(u.hostname!=='open.spotify.com') throw httpErr(400,'Paste a link from open.spotify.com (Share → Copy link)');
-  const m=u.pathname.match(/\/(playlist|album|track)\/([A-Za-z0-9]{10,40})/);
-  if(!m) throw httpErr(400,"That link isn't a playlist, album or song");
-  const r=await fetch(`https://open.spotify.com/embed/${m[1]}/${m[2]}`,{headers:{'User-Agent':UA,'Accept-Language':'en-US,en;q=0.9'}});
-  if(!r.ok) throw httpErr(r.status===404?404:502,r.status===404?"Spotify can't find that. Make sure the playlist is public.":`Spotify answered with ${r.status}`);
-  const d=parseEmbed(await r.text(),m[1],m[2]);
-  if(!d.tracks.length) throw httpErr(422,"Couldn't read any songs from that link. It may be private, or use 'Paste a list of songs' instead.");
-  return d;
 }
 
 /* ── covers ── */
@@ -413,10 +1373,241 @@ async function spPlaylist(id){
 let hc=null,hAt=0;
 async function health(){
   if(!hc||Date.now()-hAt>10000){
-    const[y,f]=await Promise.all([bin(YTDLP,['--version']),bin(FFMPEG,['-version'])]);
-    hc={ytdlp:y,ffmpeg:f?f.replace(/^ffmpeg version\s+(\S+).*/,'$1'):null};hAt=Date.now();
+    const[y,f,p]=await Promise.all([bin(YTDLP,['--version']),bin(FFMPEG,['-version']),bin(FFPROBE,['-version'])]);
+    hc={ytdlp:y,ffmpeg:f?f.replace(/^ffmpeg version\s+(\S+).*/,'$1'):null,ffprobe:p?p.replace(/^ffprobe version\s+(\S+).*/,'$1'):null};hAt=Date.now();
   }
-  return{...hc,clientId:clientId(),redirectUri:REDIRECT,spotifyConnected:!!readJSON('spotify.json',null),downloadDir:config.downloadDir,port:PORT};
+  return{...hc,version:VERSION,clientId:clientId(),redirectUri:REDIRECT,spotifyConnected:!!readJSON('spotify.json',null),downloadDir:config.downloadDir,localDir:LOCAL_DIR,port:PORT};
+}
+
+/* ── device sync ── */
+/* Sync deliberately uses a tiny second HTTP listener instead of exposing the
+   whole player server. Only the library endpoints are reachable there, and
+   every read/write requires the pairing code. The main server stays on
+   loopback, so a guest can never use the sync port to reach /api/state or a
+   stream. */
+const SYNC_HEADER = 'x-wavelength-sync';
+const syncDefaults = { role: 'off', enabled: false, code: '', hostUrl: '', rev: 0, lastSync: 0, remoteUpdatedAt: 0, peer: '', port: SYNC_PORT };
+let sync = { ...syncDefaults, ...readJSON('sync.json', {}) };
+let syncServer = null, syncLastError = '';
+const syncSave = () => { try { writeJSON('sync.json', sync); } catch (e) { console.error('[sync] could not save settings:', e.message); } };
+const syncCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
+const newSyncCode = () => crypto.randomBytes(4).toString('hex').toUpperCase();
+const syncList = (v, max) => Array.isArray(v) ? v.filter(x => x && typeof x === 'object').slice(0, max) : [];
+const cleanSyncLibrary = v => {
+  if (!v || typeof v !== 'object') throw httpErr(400, 'That device did not send a library');
+  return { playlists: syncList(v.playlists, 2000), liked: syncList(v.liked, 50000), history: syncList(v.history, 50000) };
+};
+const readSyncLibrary = () => {
+  const st = readJSON('state.json', {}) || {};
+  return { playlists: syncList(st.playlists, 2000), liked: syncList(st.liked, 50000), history: syncList(st.history, 50000) };
+};
+const syncCounts = lib => ({
+  playlists: lib.playlists.length,
+  tracks: lib.playlists.reduce((n, p) => n + (Array.isArray(p.tracks) ? p.tracks.length : 0), 0),
+  liked: lib.liked.length,
+  history: lib.history.length,
+});
+const stateStamp = () => { try { return fs.statSync(path.join(DATA, 'state.json')).mtimeMs; } catch { return 0; } };
+const applySyncLibrary = lib => {
+  const state = readJSON('state.json', {}) || {};
+  state.playlists = lib.playlists;
+  state.liked = lib.liked;
+  state.history = lib.history;
+  writeJSON('state.json', state);
+};
+const syncUrls = () => {
+  const urls = [];
+  for (const nets of Object.values(os.networkInterfaces())) for (const n of nets || []) {
+    if (n.family === 'IPv4' && !n.internal && !/^169\.254\./.test(n.address)) urls.push(`http://${n.address}:${SYNC_PORT}`);
+  }
+  return [...new Set(urls)];
+};
+const syncStatus = () => {
+  const lib = readSyncLibrary();
+  return {
+    ...syncDefaults,
+    ...sync,
+    role: ['off', 'host', 'guest'].includes(sync.role) ? sync.role : 'off',
+    port: SYNC_PORT,
+    urls: sync.role === 'host' ? syncUrls() : [],
+    counts: syncCounts(lib),
+    error: syncLastError,
+    device: os.hostname(),
+  };
+};
+const syncCodeOk = req => {
+  const given = syncCode(req.headers[SYNC_HEADER]);
+  const expected = syncCode(sync.code);
+  return !!expected && given.length === expected.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+};
+const syncSend = (res, code, value) => {
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, X-Wavelength-Sync',
+    'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
+  });
+  res.end(JSON.stringify(value));
+};
+async function syncHostRequest(req, res) {
+  const u = new URL(req.url || '/', 'http://sync');
+  if (req.method === 'OPTIONS') return syncSend(res, 204, {});
+  if (u.pathname === '/api/sync/info') {
+    if (req.method !== 'GET') return syncSend(res, 405, { error: 'Method not allowed' });
+    return syncSend(res, 200, { ok: true, name: os.hostname(), version: VERSION, rev: +sync.rev || 0, updatedAt: stateStamp(), port: SYNC_PORT });
+  }
+  if (u.pathname !== '/api/sync/library') return syncSend(res, 404, { error: 'Not found' });
+  if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
+  if (req.method === 'GET') {
+    return syncSend(res, 200, { ok: true, host: os.hostname(), rev: +sync.rev || 0, updatedAt: stateStamp(), library: readSyncLibrary() });
+  }
+  if (req.method === 'PUT') {
+    const raw = (await body(req, 25e6)).toString() || '{}';
+    let incoming;
+    try { incoming = JSON.parse(raw); } catch { throw httpErr(400, 'Bad library JSON'); }
+    const lib = cleanSyncLibrary(incoming.library || incoming);
+    applySyncLibrary(lib);
+    sync.rev = (+sync.rev || 0) + 1;
+    sync.lastSync = Date.now();
+    syncSave();
+    return syncSend(res, 200, { ok: true, rev: sync.rev, updatedAt: stateStamp(), counts: syncCounts(lib) });
+  }
+  return syncSend(res, 405, { error: 'Method not allowed' });
+}
+async function startSyncHost() {
+  sync.role = 'host';
+  sync.enabled = true;
+  sync.port = SYNC_PORT;
+  if (!sync.code) sync.code = newSyncCode();
+  syncSave();
+  if (syncServer) return syncStatus();
+  syncLastError = '';
+  await new Promise((resolve, reject) => {
+    const s = http.createServer((req, res) => {
+      syncHostRequest(req, res).catch(e => {
+        if (res.headersSent) return res.end();
+        syncSend(res, e.status || 500, { error: e.message || 'Sync error' });
+      });
+    });
+    s.on('error', e => {
+      syncServer = null;
+      sync.role = 'off';
+      sync.enabled = false;
+      syncLastError = e.code === 'EADDRINUSE' ? `Port ${SYNC_PORT} is already in use` : (e.message || 'Could not start sync');
+      syncSave();
+      reject(httpErr(503, syncLastError));
+    });
+    s.listen(SYNC_PORT, '0.0.0.0', () => {
+      syncServer = s;
+      sync.enabled = true;
+      syncLastError = '';
+      syncSave();
+      console.log(`[sync] hosting on port ${SYNC_PORT}`);
+      resolve();
+    });
+  });
+  return syncStatus();
+}
+async function stopSyncHost() {
+  const s = syncServer;
+  syncServer = null;
+  if (s) await new Promise(resolve => { try { s.close(() => resolve()); } catch { resolve(); } });
+  sync.role = 'off';
+  sync.enabled = false;
+  sync.rev = 0;
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
+}
+const syncHostBase = input => {
+  let raw = String(input || '').trim();
+  if (!raw) throw httpErr(400, 'Enter the host address');
+  if (!/^https?:\/\//i.test(raw)) raw = 'http://' + raw;
+  let u;
+  try { u = new URL(raw); } catch { throw httpErr(400, 'That host address is not valid'); }
+  if (!/^https?:$/.test(u.protocol)) throw httpErr(400, 'Use an http:// or https:// address');
+  u.pathname = u.pathname.replace(/\/api\/sync.*$/i, '').replace(/\/+$/, '');
+  u.search = ''; u.hash = '';
+  if (!u.port) u.port = String(SYNC_PORT);
+  return u.origin;
+};
+async function syncRemote(base, code, route, init = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 9000);
+  try {
+    const r = await fetch(base + route, {
+      ...init,
+      signal: ctrl.signal,
+      headers: { ...(init.headers || {}), [SYNC_HEADER]: code },
+    });
+    let value = {};
+    try { value = await r.json(); } catch {}
+    if (!r.ok) throw new Error(value.error || `Host answered ${r.status}`);
+    return value;
+  } catch (e) {
+    if (e.name === 'AbortError') throw httpErr(504, 'The host did not answer in time');
+    throw httpErr(502, `Could not reach the host: ${e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function joinSync(input = {}) {
+  const base = syncHostBase(input.url);
+  const code = syncCode(input.code);
+  if (code.length < 6) throw httpErr(400, 'Enter the pairing code shown on the host');
+  const info = await syncRemote(base, code, '/api/sync/info');
+  const remote = await syncRemote(base, code, '/api/sync/library');
+  if (!remote.library) throw httpErr(502, 'The host did not send a library');
+  if (syncServer) await stopSyncHost();
+  applySyncLibrary(cleanSyncLibrary(remote.library));
+  sync.role = 'guest';
+  sync.enabled = true;
+  sync.hostUrl = base;
+  sync.code = code;
+  sync.peer = info.name || remote.host || '';
+  sync.rev = +remote.rev || 0;
+  sync.remoteUpdatedAt = +remote.updatedAt || 0;
+  sync.lastSync = Date.now();
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
+}
+async function pullSync() {
+  if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'This device is not connected to a host');
+  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library');
+  if (!remote.library) throw httpErr(502, 'The host did not send a library');
+  applySyncLibrary(cleanSyncLibrary(remote.library));
+  sync.rev = +remote.rev || 0;
+  sync.remoteUpdatedAt = +remote.updatedAt || 0;
+  sync.lastSync = Date.now();
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
+}
+async function pushSync() {
+  if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'This device is not connected to a host');
+  const lib = readSyncLibrary();
+  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ library: lib }),
+  });
+  sync.rev = +remote.rev || 0;
+  sync.remoteUpdatedAt = +remote.updatedAt || 0;
+  sync.lastSync = Date.now();
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
+}
+async function disconnectSync() {
+  if (sync.role === 'host') return stopSyncHost();
+  sync.role = 'off';
+  sync.enabled = false;
+  sync.hostUrl = '';
+  sync.code = '';
+  sync.peer = '';
+  sync.rev = 0;
+  sync.remoteUpdatedAt = 0;
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
 }
 
 /* ── routing ── */
@@ -437,6 +1628,29 @@ async function api(req,res,u,p){
   const parse=async(max=1e6)=>{try{return JSON.parse((await body(req,max)).toString()||'{}');}catch(e){throw e.status?e:httpErr(400,'Bad JSON');}};
 
   if(m==='GET'&&p==='/api/health') return json(res,await health());
+  if(m==='GET'&&p==='/api/stats') return json(res,dataStats());
+  if(m==='POST'&&p==='/api/cache/clear'){
+    let freed=0, removed=0;
+    for(const name of fs.readdirSync(CACHE_DIR)){
+      const file=path.join(CACHE_DIR,name);
+      if(activeFiles.has(file)) continue;
+      try{const st=fs.statSync(file);fs.unlinkSync(file);freed+=st.size;removed++;}
+      catch{}
+    }
+    return json(res,{ok:true,freed,removed,...dataStats()});
+  }
+
+  if(m==='GET'&&p==='/api/local'){
+    const tracks=await localTracks(q.get('force')==='1');
+    return json(res,{tracks,folder:LOCAL_DIR,ffprobe:!!(await health()).ffprobe});
+  }
+  if(m==='POST'&&p==='/api/local/upload') return json(res,await receiveLocalFile(req));
+  if(m==='DELETE'&&(g=p.match(/^\/api\/local\/([a-f0-9]{16})$/))) return json(res,await deleteLocalFile(g[1]));
+  if((m==='GET'||m==='HEAD')&&(g=p.match(/^\/api\/local\/([a-f0-9]{16})\/stream$/))){
+    const entry=localEntry(g[1]);
+    if(!entry) throw httpErr(404,'Local file not found');
+    return serveCached(req,res,path.join(LOCAL_DIR,entry.rel));
+  }
 
   if(p==='/api/config'&&m==='PUT'){
     const b=await parse();
@@ -457,6 +1671,14 @@ async function api(req,res,u,p){
     if(m==='GET') return json(res,readJSON('state.json',null));
     if(m==='PUT'){writeJSON('state.json',await parse(25e6));return json(res,{ok:true});}
   }
+
+  if(m==='GET'&&p==='/api/sync/status') return json(res,syncStatus());
+  if(m==='POST'&&p==='/api/sync/host') return json(res,await startSyncHost());
+  if(m==='POST'&&p==='/api/sync/stop') return json(res,await stopSyncHost());
+  if(m==='POST'&&p==='/api/sync/join') return json(res,await joinSync(await parse()));
+  if(m==='POST'&&p==='/api/sync/pull') return json(res,await pullSync());
+  if(m==='POST'&&p==='/api/sync/push') return json(res,await pushSync());
+  if(m==='POST'&&p==='/api/sync/disconnect') return json(res,await disconnectSync());
 
   if(m==='POST'&&p==='/api/cover'){
     const b=await body(req,6e6),ext=sniff(b);
@@ -489,8 +1711,25 @@ async function api(req,res,u,p){
     return json(res,{ytId:id});
   }
   if(m==='GET'&&(g=p.match(/^\/api\/related\/([A-Za-z0-9_-]{11})$/))) return json(res,await related(g[1]));
-  if(m==='GET'&&(g=p.match(/^\/api\/prefetch\/([A-Za-z0-9_-]{11})$/))) {await audioUrl(g[1]);res.writeHead(204);return res.end();}
-  if(m==='GET'&&(g=p.match(/^\/api\/stream\/([A-Za-z0-9_-]{11})$/))) return await stream(req,res,g[1]);
+  if(m==='GET'&&(g=p.match(/^\/api\/ready\/([A-Za-z0-9_-]{11})$/))) {
+    const cached=cachedAudio(g[1]);
+    if(cached){ const st=fs.statSync(cached); return json(res,{ok:true,cached:true,size:st.size,mime:AUDIO_MIME[path.extname(cached).toLowerCase()]||'audio/mp4'}); }
+    const job=startDownload(g[1]);
+    await waitReady(job);
+    return json(res,{ok:true,cached:false,size:job.total||fileSize(job.file),mime:AUDIO_MIME[path.extname(job.file).toLowerCase()]||'audio/mp4'});
+  }
+  if (m === 'GET' && (g = p.match(/^\/api\/resolve\/([A-Za-z0-9_-]{11})$/))) {
+    const r = await resolveAudio(g[1], true, false, q.get('q'));
+    return json(res, { ok: true, id: g[1], ext: r.ext, mime: r.mime, quality: r.quality, bitrate: r.bitrate, duration: r.duration, expiresAt: r.expiresAt, cached: !!r.cached });
+  }
+  if (m === 'GET' && (g = p.match(/^\/api\/(?:warm|prefetch)\/([A-Za-z0-9_-]{11})$/))) {
+    // Warm the URL cache only. Never download the whole song for a prefetch.
+    resolveAudio(g[1], false, false, q.get('q')).catch(() => {});
+    res.writeHead(204, { 'Cache-Control': 'no-store' });
+    return res.end();
+  }
+  if (m === 'GET' && (g = p.match(/^\/api\/cached\/([A-Za-z0-9_-]{11})$/))) return json(res, { cached: !!cachedAudio(g[1]) });
+  if(m==='GET'&&(g=p.match(/^\/api\/stream\/([A-Za-z0-9_-]{11})$/))) return await stream(req,res,g[1],q.get('q'));
 
   if(m==='POST'&&p==='/api/download'){
     const b=await parse();
@@ -546,6 +1785,7 @@ server.listen(PORT,HOST,()=>{
   const url=`http://127.0.0.1:${PORT}`;
   console.log(`\n  Wavelength  →  ${url}\n  Spotify redirect URI  →  ${REDIRECT}\n  Downloads  →  ${config.downloadDir}\n`);
   if(!LOOPBACK) for(const l of Object.values(os.networkInterfaces()).flat()) if(l&&l.family==='IPv4'&&!l.internal) console.log(`  Network  →  http://${l.address}:${PORT}`);
+  if(sync.role==='host'&&sync.enabled) startSyncHost().catch(e=>console.error('[sync]',e.message));
   if(process.env.NO_OPEN!=='1'){
     const c=process.platform==='darwin'?['open',[url]]:process.platform==='win32'?['cmd',['/c','start','',url]]:['xdg-open',[url]];
     try{spawn(c[0],c[1],{stdio:'ignore',detached:true}).on('error',()=>{}).unref();}catch{}

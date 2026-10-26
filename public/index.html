@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Wavelength</title>
 <meta name="theme-color" content="#000000">
+<meta name="description" content="Wavelength is a fast, focused music player for searching, collecting and playing songs with a clean, customizable interface.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: http://127.0.0.1:* https:; media-src 'self' blob: data: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*;">
 <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icons/favicon.png"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,7 +14,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="css/style.css">
-<script>try{var s=JSON.parse(localStorage.getItem('wl')||'{}');if(s.theme)document.documentElement.dataset.theme=s.theme;if(s.style)document.documentElement.dataset.style=s.style;if(s.accent)document.documentElement.style.setProperty('--accent',s.accent)}catch(e){}</script>
+<script>try{var s=JSON.parse(localStorage.getItem('wl')||'{}');if(s.theme)document.documentElement.dataset.theme=s.theme;if(s.style)document.documentElement.dataset.style=s.style;if(s.accent)document.documentElement.style.setProperty('--accent',s.accent);if(s.read)document.documentElement.dataset.read=s.read;if(s.contrast)document.documentElement.dataset.contrast='high';if(s.motion)document.documentElement.dataset.motion=s.motion}catch(e){}</script>
 </head>
 <body>
 <div class="ambient"><i></i><i></i></div>
@@ -21,12 +23,12 @@
   <aside class="side card">
     <div class="logo"><span class="logo-dots"><i></i><i></i><i></i><i></i></span>Wavelength</div>
     <nav class="nav">
-      <a data-go="home" data-r="home"><span data-ic="home"></span>Home</a>
-      <a data-go="search" data-r="search"><span data-ic="search"></span>Search</a>
-      <a data-go="library" data-r="library"><span data-ic="lib"></span>Library</a>
-      <a data-go="import" data-r="import"><span data-ic="import"></span>Spotify import</a>
-      <a data-go="downloads" data-r="downloads"><span data-ic="dl"></span>Downloads</a>
-      <a data-go="settings" data-r="settings"><span data-ic="gear"></span>Settings</a>
+      <a href="#home" data-go="home" data-r="home"><span data-ic="home"></span>Home</a>
+      <a href="#search" data-go="search" data-r="search"><span data-ic="search"></span>Search</a>
+      <a href="#library" data-go="library" data-r="library"><span data-ic="lib"></span>Library</a>
+      <a href="#import" data-go="import" data-r="import"><span data-ic="import"></span>Spotify import</a>
+      <a href="#downloads" data-go="downloads" data-r="downloads"><span data-ic="dl"></span>Downloads</a>
+      <a href="#settings" data-go="settings" data-r="settings"><span data-ic="gear"></span>Settings</a>
     </nav>
     <div class="side-h"><span>Playlists</span><button class="ib sm" data-act="newpl" data-ic="plus" title="New playlist"></button></div>
     <div class="side-pl" id="side-pl"></div>
@@ -34,35 +36,35 @@
 
   <main class="main card" id="main">
     <header class="top">
-      <label class="searchbox"><span data-ic="search"></span><input id="q" type="search" placeholder="Search any song or artist" autocomplete="off" spellcheck="false"></label>
-      <nav class="mnav"><a data-go="home" data-ic="home"></a><a data-go="library" data-ic="lib"></a><a data-go="import" data-ic="import"></a><a data-go="downloads" data-ic="dl"></a><a data-go="settings" data-ic="gear"></a></nav>
+      <div class="searchbox" id="searchbox"><span data-ic="search"></span><input id="q" type="search" placeholder="Search any song or artist" autocomplete="off" spellcheck="false" aria-label="Search any song or artist"><button class="search-clear" id="search-clear" type="button" data-act="search-clear" title="Clear search" aria-label="Clear search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button><kbd class="search-kbd" id="search-kbd">⌘ K</kbd></div>
+      <nav class="mnav" aria-label="Primary"><a href="#home" data-go="home" data-ic="home" aria-label="Home" title="Home"></a><a href="#library" data-go="library" data-ic="lib" aria-label="Library" title="Library"></a><a href="#import" data-go="import" data-ic="import" aria-label="Spotify import" title="Spotify import"></a><a href="#downloads" data-go="downloads" data-ic="dl" aria-label="Downloads" title="Downloads"></a><a href="#settings" data-go="settings" data-ic="gear" aria-label="Settings" title="Settings"></a></nav>
     </header>
     <div id="banner"></div>
     <div class="view" id="view"></div>
   </main>
 </div>
 
-<footer class="player" id="player">
+<footer class="player" id="player" aria-label="Player">
   <div class="p-left">
-    <div class="p-art" id="p-art"><div class="art"><span class="art-d"></span></div></div>
-    <div class="p-meta" id="p-meta"><div class="p-title" id="p-title">Nothing playing</div><div class="p-artist" id="p-artist">Pick a song to start</div></div>
-    <button class="ib hrt" data-act="like" id="p-like" title="Like"></button>
+    <div class="p-art" id="p-art" data-act="np" title="Open full-screen player"><div class="art"><span class="art-d"></span></div></div>
+    <div class="p-meta" id="p-meta" data-act="np" title="Open full-screen player"><div class="p-title" id="p-title">Nothing playing</div><div class="p-artist" id="p-artist">Pick a song to start</div></div>
+    <button class="ib hrt" data-act="like" id="p-like" title="Like current song (L)"></button>
   </div>
   <div class="p-center">
     <div class="ctl">
-      <button class="ib" data-act="shuffle" data-ic="shuffle" title="Shuffle"></button>
-      <button class="ib lg" data-act="prev" data-ic="prev" title="Previous"></button>
-      <button class="pp" data-act="play" aria-label="Play or pause"><svg class="dm" viewBox="0 0 25 25"></svg><span class="pp-i"></span></button>
-      <button class="ib lg" data-act="next" data-ic="next" title="Next"></button>
-      <button class="ib" data-act="repeat" data-ic="repeat" id="b-repeat" title="Repeat"></button>
+      <button class="ib" data-act="shuffle" data-ic="shuffle" title="Shuffle (S)"></button>
+      <button class="ib lg" data-act="prev" data-ic="prev" title="Previous (P)"></button>
+      <button class="pp" data-act="play" aria-label="Play or pause (Space)"><svg class="dm" viewBox="0 0 25 25"></svg><span class="pp-i"></span></button>
+      <button class="ib lg" data-act="next" data-ic="next" title="Next (N)"></button>
+      <button class="ib" data-act="repeat" data-ic="repeat" id="b-repeat" title="Repeat (R)"></button>
     </div>
-    <div class="prog"><span class="tm t-cur">0:00</span><div class="dtw" data-seek><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
+    <div class="prog"><span class="tm t-cur">0:00</span><div class="dtw" data-seek role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
   </div>
   <div class="p-right">
     <button class="ib" data-act="queue" data-ic="queue" title="Queue"></button>
     <button class="ib" data-act="np" data-ic="expand" title="Full screen"></button>
-    <button class="ib" data-act="mute" id="b-mute" title="Mute"></button>
-    <div class="dtw vol" data-vol><div class="dt"><i id="v-fill"></i></div></div>
+    <button class="ib" data-act="mute" id="b-mute" title="Mute (M)"></button>
+    <div class="dtw vol" data-vol role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" aria-valuetext="80 percent"><div class="dt"><i id="v-fill"></i></div></div>
   </div>
 </footer>
 
@@ -70,9 +72,9 @@
   <div class="np-bg"></div>
   <button class="ib x" data-act="np" data-ic="close" title="Close"></button>
   <div class="np-art" id="np-art"></div>
-  <div class="np-meta"><h2 id="np-title">Nothing playing</h2><p id="np-artist"></p></div>
+  <div class="np-meta"><h2 id="np-title">Nothing playing</h2><p id="np-artist"></p><button class="ib np-like" data-act="like" data-ic="heart" title="Like current song (L)" aria-label="Like current song"></button></div>
   <canvas id="viz"></canvas>
-  <div class="prog wide"><span class="tm t-cur">0:00</span><div class="dtw" data-seek><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
+  <div class="prog wide"><span class="tm t-cur">0:00</span><div class="dtw" data-seek role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
   <div class="ctl">
     <button class="ib" data-act="shuffle" data-ic="shuffle" title="Shuffle"></button>
     <button class="ib lg" data-act="prev" data-ic="prev" title="Previous"></button>
@@ -84,14 +86,15 @@
 </section>
 
 <aside class="queue card" id="queue">
-  <div class="q-h"><h3>Up next</h3><div><button class="btn sm" data-act="qclear">Clear</button><button class="ib" data-act="queue" data-ic="close"></button></div></div>
+  <div class="q-h"><h3>Up next</h3><div><button class="btn sm" data-act="qclear">Clear</button><button class="ib" data-act="queue" data-ic="close" title="Close queue" aria-label="Close queue"></button></div></div>
   <div class="q-list" id="q-list"></div>
 </aside>
 
-<div class="modal" id="modal"></div>
-<div class="menu" id="menu"></div>
-<div class="toast" id="toast"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="Dialog"></div>
+<div class="menu" id="menu" role="menu"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <audio id="audio" preload="auto"></audio>
+<audio id="audio-b" preload="auto" aria-hidden="true"></audio>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,12 +1,32 @@
 # dependencies
 node_modules/
 
-# local config (contains Spotify client ID etc.)
+# local config (Spotify client ID, etc.)
 .env
 
-# app data: library, custom covers, downloads
+# runtime data, caches and build output
 data/
+backups/
 dist/
+android-app/
+flatpak/
+flatpak-build/
+flatpak-repo/
+vendor/
+*.flatpak
+*.apk
+*.AppImage
+*.dmg
+*.exe
+*.blockmap
+
+# local/legacy files
+/app.js
+server.js.bak
+*.bak
+ytpatch/__pycache__/
+__pycache__/
+*.pyc
 
 # macOS / editor noise
 .DS_Store

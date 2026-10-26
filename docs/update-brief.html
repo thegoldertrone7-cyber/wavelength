@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wavelength — Update Brief</title>
+<style>
+  :root{
+    --bg:#070708;--card:#101011;--card2:#171719;--line:rgba(255,255,255,.09);
+    --text:#f4f4f4;--text2:#9b9ba1;--text3:#5d5d63;--accent:#d71921;
+    --accent-rgb:215,25,33;--green:#55d68b;--amber:#f3bd58;
+    --mono:'SFMono-Regular',ui-monospace,'SF Mono',Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    --spring:cubic-bezier(.34,1.56,.64,1);
+  }
+  *{box-sizing:border-box;margin:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  body::before{content:'';position:fixed;inset:-20%;z-index:-1;pointer-events:none;background:
+    radial-gradient(circle at 15% 0%,rgba(var(--accent-rgb),.2),transparent 38%),
+    radial-gradient(circle at 90% 90%,rgba(var(--accent-rgb),.08),transparent 40%);filter:blur(70px)}
+  .wrap{max-width:1040px;margin:0 auto;padding:52px 30px 90px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:58px}
+  .brand{display:flex;align-items:center;gap:13px;font:800 20px var(--mono);letter-spacing:.05em}
+  .dots{display:grid;grid-template-columns:repeat(2,8px);gap:4px}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--text)}
+  .dots i:first-child{background:var(--accent)}
+  .stamp{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--text2);border:1px solid var(--line);padding:8px 14px;border-radius:999px;background:rgba(255,255,255,.025)}
+  .hero{position:relative;padding:46px 44px;border-radius:38px;background:rgba(18,18,20,.72);border:1px solid var(--line);overflow:hidden;box-shadow:0 40px 100px -40px #000;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+  .hero::after{content:'';position:absolute;inset:0;background:radial-gradient(circle,rgba(255,255,255,.13) 1px,transparent 1.5px) 0 0/17px 17px;mask-image:linear-gradient(105deg,transparent 45%,#000);-webkit-mask-image:linear-gradient(105deg,transparent 45%,#000);pointer-events:none}
+  .eyebrow{font:700 10px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--text2);display:flex;align-items:center;gap:9px}
+  .eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px var(--accent)}
+  h1{font:800 clamp(42px,8vw,82px)/.94 var(--sans);letter-spacing:-.055em;margin:18px 0 18px;max-width:760px;position:relative;z-index:1}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{max-width:680px;color:var(--text2);font-size:17px;line-height:1.65;position:relative;z-index:1}
+  .hero-meta{display:flex;gap:28px;flex-wrap:wrap;margin-top:30px;padding-top:26px;border-top:1px solid var(--line);position:relative;z-index:1}
+  .metric b{display:block;font:700 22px var(--mono);letter-spacing:-.04em}
+  .metric span{font:500 9px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--text2)}
+  .jump{display:flex;gap:8px;flex-wrap:wrap;margin:30px 0 44px;position:sticky;top:14px;z-index:5;padding:10px;border-radius:999px;background:rgba(7,7,8,.72);border:1px solid var(--line);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);width:max-content;max-width:100%}
+  .jump a{padding:8px 14px;border-radius:999px;text-decoration:none;color:var(--text2);font:600 10px var(--mono);letter-spacing:.07em;text-transform:uppercase;transition:.2s}
+  .jump a:hover{color:var(--text);background:var(--card2)}
+  section{margin-top:50px;scroll-margin-top:90px}
+  .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:16px}
+  h2{font:800 28px/1.1 var(--sans);letter-spacing:-.035em}
+  .sec-head p{font:500 10px var(--mono);color:var(--text3);text-transform:uppercase;letter-spacing:.12em}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .item{position:relative;padding:22px 22px 20px;border-radius:26px;background:var(--card);border:1px solid var(--line);overflow:hidden;transition:transform .5s var(--spring),background .25s,border-color .25s}
+  .item:hover{transform:translateY(-4px);background:var(--card2);border-color:rgba(255,255,255,.14)}
+  .item::before{content:'';position:absolute;left:22px;top:0;width:34px;height:2px;background:var(--accent);opacity:.7}
+  .item .tag{font:700 9px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:11px;display:flex;align-items:center;justify-content:space-between}
+  .item .tag span{color:var(--text3);letter-spacing:.08em}
+  .item h3{font-size:16px;font-weight:650;letter-spacing:-.015em;margin-bottom:5px}
+  .item p{font-size:13px;color:var(--text2);line-height:1.58}
+  .item.wide{grid-column:1/-1}
+  .checklist{display:grid;gap:0}
+  .check{display:flex;align-items:flex-start;gap:15px;padding:16px 4px;border-bottom:1px solid var(--line)}
+  .check:last-child{border-bottom:0}
+  .box{width:19px;height:19px;border-radius:6px;border:1px solid rgba(255,255,255,.2);display:grid;place-items:center;flex:none;margin-top:2px;background:rgba(255,255,255,.025);font-size:11px;color:var(--text3)}
+  .check.done .box{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 0 14px rgba(var(--accent-rgb),.35)}
+  .check.done .box::after{content:'✓'}
+  .check b{font-size:14px;font-weight:600;display:block}
+  .check small{font-size:12px;color:var(--text2)}
+  .badge{font:700 8px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--text2);margin-left:8px;vertical-align:1px}
+  .badge.now{color:var(--amber);border-color:rgba(243,189,88,.25);background:rgba(243,189,88,.06)}
+  .badge.done{color:var(--green);border-color:rgba(85,214,139,.25);background:rgba(85,214,139,.06)}
+  .note{margin-top:50px;padding:26px 28px;border-radius:26px;border:1px dashed var(--line);display:flex;gap:18px;align-items:flex-start;background:rgba(255,255,255,.012)}
+  .note .nd{width:34px;height:34px;border-radius:50%;background:rgba(var(--accent-rgb),.14);color:var(--accent);display:grid;place-items:center;flex:none;font:700 15px var(--mono)}
+  .note b{display:block;margin-bottom:4px;font-size:14px}.note p{font-size:13px;color:var(--text2);max-width:760px}
+  footer{display:flex;justify-content:space-between;gap:20px;margin-top:42px;padding-top:22px;border-top:1px solid var(--line);font:500 10px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--text3)}
+  @media(max-width:700px){.wrap{padding:28px 18px 60px}.grid{grid-template-columns:1fr}.hero{padding:32px 24px}.top{margin-bottom:36px}.hero-meta{gap:18px}.jump{position:static}.item.wide{grid-column:auto}}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dots"><i></i><i></i><i></i><i></i></span>Wavelength</div>
+    <div class="stamp">Update brief · 25 Oct 2026</div>
+  </header>
+
+  <div class="hero">
+    <div class="eyebrow">Polish &amp; sync pass · shipped</div>
+    <h1>Everything we’re adding, <em>in one place.</em></h1>
+    <p class="lede">A focused polish pass: make Wavelength faster and smoother, sharpen the edges people touch every day, add a real home for lossless local audio, give playlists a stronger visual identity, and let the library travel between devices — without changing the app’s look and feel.</p>
+    <div class="hero-meta">
+      <div class="metric"><b>7</b><span>workstreams</span></div>
+      <div class="metric"><b>40+</b><span>targeted changes</span></div>
+      <div class="metric"><b>0</b><span>visual redesigns</span></div>
+      <div class="metric"><b>1</b><span>living page</span></div>
+    </div>
+  </div>
+
+  <nav class="jump">
+    <a href="#motion">Performance &amp; motion</a>
+    <a href="#settings">Settings</a>
+    <a href="#lossless">Lossless</a>
+    <a href="#qol">Daily QoL</a>
+    <a href="#import">Spotify import</a>
+    <a href="#covers">Playlist covers</a>
+    <a href="#sync">Search &amp; sync</a>
+  </nav>
+
+  <section id="motion">
+    <div class="sec-head"><h2>Performance &amp; motion</h2><p>01 — Feel</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Navigation <span>shipped</span></div><h3>Frame-ready page changes</h3><p>Replace the blocking route pause and expensive full-page blur with a shorter, GPU-friendly fade and lift. Same rhythm, less waiting.</p></div>
+      <div class="item"><div class="tag">Visualizer <span>shipped</span></div><h3>Adaptive visualizer loop</h3><p>The canvas runs only when visible, pauses in the background, and backs off to an efficient refresh rate while keeping the motion fluid.</p></div>
+      <div class="item"><div class="tag">Playback UI <span>shipped</span></div><h3>Cheaper progress updates</h3><p>Progress, clocks, and media-session state update once per animation frame with cached nodes instead of forcing repeated DOM scans.</p></div>
+      <div class="item"><div class="tag">Compositing <span>shipped</span></div><h3>Motion on the right layer</h3><p>Animate transform and opacity where possible, isolate long lists, and remove paint-heavy effects from active animations without changing their appearance.</p></div>
+      <div class="item"><div class="tag">Interaction <span>shipped</span></div><h3>Springier, quieter micro-motion</h3><p>Unify easing and timing across views, rows, cards, toasts, menus, and modals. Less jitter; more intentional movement.</p></div>
+      <div class="item"><div class="tag">Accessibility <span>shipped</span></div><h3>Real motion control</h3><p>Respect the system preference automatically and add an in-app Motion setting for people who want reduced movement.</p></div>
+      <div class="item"><div class="tag">Images <span>shipped</span></div><h3>Smarter artwork loading</h3><p>Decode covers asynchronously, reserve layout space, and fade them in once ready to prevent flashes and layout shifts.</p></div>
+      <div class="item"><div class="tag">Idle work <span>shipped</span></div><h3>Pause what isn’t visible</h3><p>Stop visualizer, polling, and nonessential animation work when the window is hidden or the full-screen player is closed.</p></div>
+    </div>
+  </section>
+
+  <section id="settings">
+    <div class="sec-head"><h2>Settings, refined</h2><p>02 — Control</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Structure <span>shipped</span></div><h3>Clearer sections</h3><p>Group appearance, playback, downloads, import, storage, and shortcuts into calmer, easier-to-scan sections with clearer labels.</p></div>
+      <div class="item"><div class="tag">Sleep <span>shipped</span></div><h3>Persistent sleep timer</h3><p>Keep the countdown across settings redraws and reloads, with quick presets and a visible “pausing in…” state.</p></div>
+      <div class="item"><div class="tag">Storage <span>shipped</span></div><h3>Cache at a glance</h3><p>Show cached audio, artwork, and data size, plus a safe one-click way to clear temporary playback cache.</p></div>
+      <div class="item"><div class="tag">Motion <span>shipped</span></div><h3>Full or reduced</h3><p>A clear motion preference that lives beside the existing theme and visualizer controls instead of hidden in the OS.</p></div>
+      <div class="item"><div class="tag">Feedback <span>shipped</span></div><h3>Settings that confirm themselves</h3><p>Inline save states, better disabled states, and clearer version/tool health so it’s obvious what happened.</p></div>
+      <div class="item"><div class="tag">Shortcuts <span>shipped</span></div><h3>Keyboard map in-app</h3><p>A compact shortcuts sheet, reachable with <code>?</code>, documenting the new player and navigation keys.</p></div>
+      <div class="item"><div class="tag">Styles <span>shipped</span></div><h3>Style guide</h3><p>A short in-app explanation of what each interface style is for, with accessible descriptions on every style button.</p></div>
+    </div>
+  </section>
+
+  <section id="lossless">
+    <div class="sec-head"><h2>Lossless &amp; quality</h2><p>03 — Source</p></div>
+    <div class="grid">
+      <div class="item wide"><div class="tag">Local library <span>shipped</span></div><h3>Your own files, untouched</h3><p>Add FLAC, WAV, AIFF, ALAC, M4A, MP3, OGG, or Opus files. Wavelength copies them into its data folder, reads their metadata and embedded artwork with ffprobe/ffmpeg, and keeps them available offline.</p></div>
+      <div class="item"><div class="tag">Native playback <span>shipped</span></div><h3>No transcoding</h3><p>Lossless local files play at their original bit depth and sample rate through range-enabled streaming. The interface shows the exact format, bit depth, and sample rate.</p></div>
+      <div class="item"><div class="tag">File actions <span>shipped</span></div><h3>Add, rescan, remove</h3><p>A dedicated Local files view with add-files, folder rescan, delete, storage totals, and a clear library count. Files can also be managed from Settings.</p></div>
+      <div class="item"><div class="tag">Streaming <span>shipped</span></div><h3>Best available or data saver</h3><p>Choose the highest-bitrate YouTube stream or a lower-bandwidth option. Resolutions are cached per quality so switching does not repeat the slow extraction step.</p></div>
+      <div class="item"><div class="tag">Clarity <span>shipped</span></div><h3>Honest quality labels</h3><p>YouTube-sourced audio remains labeled as lossy. Lossless badges appear only for local files that genuinely retain their original quality.</p></div>
+    </div>
+  </section>
+
+  <section id="qol">
+    <div class="sec-head"><h2>Daily quality of life</h2><p>04 — Flow</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Keys <span>shipped</span></div><h3>Full keyboard control</h3><p>Search, play/pause, previous/next, seek, volume, mute, like, shuffle, repeat, queue, full-screen, and close — all without leaving the keys.</p></div>
+      <div class="item"><div class="tag">Volume <span>shipped</span></div><h3>Wheel + reset</h3><p>Scroll over the volume control to fine-tune, double-click to restore the last level, and keep the muted icon in sync.</p></div>
+      <div class="item"><div class="tag">Session <span>shipped</span></div><h3>Pick up where you left off</h3><p>Remember the queue, current track, and playback position between launches — restored paused so nothing surprises you.</p></div>
+      <div class="item"><div class="tag">Details <span>shipped</span></div><h3>Faster track actions</h3><p>Copy song details, see the matched source, and get clearer feedback when a song has no YouTube match.</p></div>
+    </div>
+  </section>
+
+  <section id="import">
+    <div class="sec-head"><h2>Smarter Spotify import</h2><p>05 — Bring it over</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Preview <span>shipped</span></div><h3>See before you import</h3><p>Read the playlist first and show its artwork, name, song count, duration, and whether it will be a fresh import or an update.</p></div>
+      <div class="item"><div class="tag">Control <span>shipped</span></div><h3>Editable import card</h3><p>Rename the playlist, choose whether to use Spotify’s artwork, and pick a custom cover before committing.</p></div>
+      <div class="item"><div class="tag">Updates <span>shipped</span></div><h3>Smart refresh</h3><p>Show what an update changes — new songs, removed songs, and preserved YouTube matches — instead of silently replacing the list.</p></div>
+      <div class="item"><div class="tag">Lists <span>shipped</span></div><h3>Forgiving paste parser</h3><p>Handle numbered lists, bullets, tabs, quotes, CSV-style rows, and both “Artist – Song” and “Song – Artist” formats more gracefully.</p></div>
+      <div class="item"><div class="tag">Matching <span>shipped</span></div><h3>Clearer matching pass</h3><p>Show progress and a final summary, keep already-matched songs, and make “Match remaining” obvious when a few tracks need help.</p></div>
+      <div class="item"><div class="tag">Recovery <span>shipped</span></div><h3>Useful errors</h3><p>Explain private links, region locks, expired sessions, and truncated imports in plain language with the next action to take.</p></div>
+    </div>
+  </section>
+
+  <section id="covers">
+    <div class="sec-head"><h2>Playlist identity</h2><p>06 — Make it yours</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Logos <span>shipped</span></div><h3>A much bigger icon library</h3><p>Expand from 16 emojis to a grouped library spanning music, moods, places, activities, nature, and symbols.</p></div>
+      <div class="item"><div class="tag">Colour <span>shipped</span></div><h3>Cover palettes + gradients</h3><p>Pair any logo with curated solid and gradient backgrounds so covers feel deliberate rather than random.</p></div>
+      <div class="item"><div class="tag">Pictures <span>shipped</span></div><h3>Picture options, not just upload</h3><p>Use your own image, pull the Spotify artwork, use the first track’s artwork, or reset to a text monogram.</p></div>
+      <div class="item"><div class="tag">Editing <span>shipped</span></div><h3>Live cover studio</h3><p>A larger preview, drag-and-drop, image removal, randomize, and a cleaner layout that keeps the current modal feel.</p></div>
+      <div class="item wide"><div class="tag">Compatibility <span>shipped</span></div><h3>Older playlists keep working</h3><p>Existing emoji and uploaded-image covers remain valid. New colours, icons, and sources are additive, so nothing in the current library needs to be recreated.</p></div>
+    </div>
+  </section>
+
+  <section id="sync">
+    <div class="sec-head"><h2>Find it. Keep it in step.</h2><p>07 — Together</p></div>
+    <div class="grid">
+      <div class="item"><div class="tag">Search <span>shipped</span></div><h3>A starting point, not a blank page</h3><p>Search now opens with recent searches, genre shortcuts, and a focused query field. Results lead with the strongest match and keep the rest scannable below.</p></div>
+      <div class="item"><div class="tag">Results <span>shipped</span></div><h3>One clear top result</h3><p>Play the best match in one click, see the result count before scrolling, and clear the query without losing your place in the app.</p></div>
+      <div class="item"><div class="tag">Settings <span>shipped</span></div><h3>A map of your preferences</h3><p>Theme, streaming quality, and device sync appear at the top. A filter and section jump bar make a long settings page quick to navigate.</p></div>
+      <div class="item"><div class="tag">Sync <span>shipped</span></div><h3>Your library on every device</h3><p>Host on one always-open device and join with a short pairing code. Playlists, liked songs, and history move together over your local network or Tailscale.</p></div>
+      <div class="item"><div class="tag">Control <span>shipped</span></div><h3>Pull or send deliberately</h3><p>Choose when a guest replaces its library with the host’s copy, or sends its changes back. Themes, downloads, and local files stay on each device.</p></div>
+      <div class="item wide"><div class="tag">Android <span>shipped</span></div><h3>Small screen, same library</h3><p>Run browser mode with <code>HOST=0.0.0.0</code> and open the network address in Chrome. Search, settings, shuffle, Data saver playback, and track changes were checked on a 411px Android viewport.</p></div>
+    </div>
+  </section>
+
+  <div class="note">
+    <div class="nd">i</div>
+    <div><b>This is the living scope page.</b><p>Every item on this page has landed and been checked. The target was a faster app with more control, better import/covers, a truthful lossless path, and a library that travels — not a pile of unrelated features.</p></div>
+  </div>
+
+  <footer><span>Wavelength · private build</span><span>Keep the look. Lose the friction.</span></footer>
+</div>
+</body>
+</html>
