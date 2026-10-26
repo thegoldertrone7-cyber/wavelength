@@ -11,7 +11,7 @@ rm -rf "$UNPACKED" "$ROOT/flatpak-build" "$ROOT/flatpak-repo" "$ROOT/vendor"
 mkdir -p "$ROOT/vendor" "$ROOT/flatpak"
 
 # Electron app payload (not the AppImage: Flatpak runs the unpacked tree).
-npx electron-builder --linux dir --x64
+npx electron-builder --linux dir --x64 --publish never
 
 if [ ! -x "$UNPACKED/wavelength" ]; then
   echo "Expected executable not found: $UNPACKED/wavelength" >&2
@@ -82,7 +82,7 @@ modules:
       - mkdir -p /app/wavelength
       - cp -a . /app/wavelength
       - install -Dm644 app.wavelength.music.desktop /app/share/applications/app.wavelength.music.desktop
-      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/app.wavelength.music.png
+      - install -Dm644 icon-512.png /app/share/icons/hicolor/512x512/apps/app.wavelength.music.png
       - |
         cat > /app/bin/wavelength <<'WRAPPER'
         #!/bin/sh
@@ -95,7 +95,7 @@ modules:
       - type: file
         path: ../flatpak/app.wavelength.music.desktop
       - type: file
-        path: ../build/icon.png
+        path: ../build/icon-512.png
 EOF
 
 flatpak remote-add --if-not-exists --user flathub \
