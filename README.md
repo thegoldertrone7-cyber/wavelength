@@ -48,7 +48,8 @@ automatically. You can rescan the folder or delete individual files from the loc
 
 YouTube-sourced playback remains lossy; Wavelength labels the two sources separately instead of calling
 a YouTube stream lossless. Settings → Playback also has a **Streaming quality** choice: Best available
-or Data saver.
+or Data saver. Local-file playback is currently a desktop feature; the standalone Android build does not
+read files from the phone yet.
 
 ## Importing from Spotify
 
@@ -57,6 +58,8 @@ Playlists, albums and songs work. The playlist must be public. Without signing i
 first 100 songs of a playlist; "Paste a list of songs" always works for any length.
 Signing in with Spotify is optional (only for playlists over 100 songs and liked songs): create an app at
 developer.spotify.com/dashboard, add the Redirect URI shown on the Import page, paste the Client ID.
+Spotify links and account import run on the desktop; the standalone Android build accepts a pasted list
+of songs and matches them on YouTube.
 
 ## Device sync
 
@@ -72,31 +75,45 @@ changes** replaces the host's library with this device's copy.
 ## Android
 
 Download the APK from the [Releases page](https://github.com/thegoldertrone7-cyber/wavelength/releases).
-The APK is a companion client: it does **not** bundle the Node server, `yt-dlp` or
-`ffmpeg`. Playback, downloads and local files come from the computer running Wavelength.
 
-1. Open Wavelength on your computer. The desktop app is the easiest option; browser mode
-   also works with `HOST=0.0.0.0 ./start.sh`.
-2. In **Settings → Devices → Phone & browser access**, copy the address shown
-   (for example `http://192.168.1.10:38421`).
-3. On the phone, open Wavelength and paste that address, or tap **Find my computer** to
-   scan the current Wi-Fi network for Wavelength on ports `38421` (desktop app) and
-   `3000` (browser mode). If more than one server answers, pick yours from the list.
-4. The desktop app usually uses port `38421`. If the connection fails, the app stays on its
-   native setup screen and offers **Retry**, **Back to player** and **Find my computer**;
-   it never leaves Chrome's "Webpage not available" page in front.
-5. Tap the small `⋮` button in the top-right corner to change the server later.
+The Android build is **standalone**. Search, streaming and your playlists run on the phone.
+It does not need the desktop app, Node, `yt-dlp`, `ffmpeg` or a Wavelength server. An internet
+connection is still required for YouTube playback.
 
-**`127.0.0.1` / `localhost` on Android means the phone itself, not your computer.** The app
-rejects those addresses and explains why. Use the computer's Wi-Fi/Tailscale address instead.
+The phone uses NewPipeExtractor to resolve YouTube audio directly. The first launch after
+upgrading from the old companion APK tries to import the library from the last server address;
+after that, the library lives in the app and survives with the computer off. Grant the
+notification permission when asked so playback controls appear on the lock screen.
 
-Only do this on a network you trust: anyone who can reach that address can use your
-Wavelength library. The desktop app listens on the local network while it runs; the plain
-`./start.sh` / `node server.js` mode stays loopback-only unless you set `HOST=0.0.0.0`.
+On Android today:
 
-While a song plays, Android shows lock-screen and notification controls (play, pause, next,
-previous, seek, artwork). For browser-only use, HTTPS is needed for Chrome's Install app /
-Share-target features (for example `tailscale serve --bg 3000`).
+- Search YouTube, play songs and build playlists on the phone.
+- Keep the library on the phone and optionally sync it with a computer.
+- Control playback from the lock screen, notification, Bluetooth or a headset.
+- Import a pasted list of songs from the Import page.
+
+Not yet available on Android: direct Spotify links/account import, offline downloads and
+local-file playback. Those remain desktop features for now; on the phone, paste song names
+on the Import page and Wavelength matches them on YouTube.
+
+### Optional computer sync
+
+The computer is only needed while syncing; disconnect and keep listening on the phone.
+
+1. On the computer, open **Settings → Devices → Start hosting**. Note the address
+   (for example `http://192.168.1.10:38422`) and the pairing code.
+2. On the phone, open **Settings → Devices → Join a host**, enter the address including
+   the sync port and the pairing code.
+3. Use **Pull now** to replace the phone library with the host copy, or **Send changes** to
+   replace the host library with the phone copy. **Disconnect** when finished.
+
+The sync listener runs only while Wavelength is open on the computer. Use Tailscale on both
+devices, or the same Wi-Fi and allow that port through the host firewall. Only sync on a
+network you trust. `127.0.0.1` / `localhost` on the phone means the phone itself, not the
+computer; use the computer's LAN or Tailscale address.
+
+For browser-only use, HTTPS is needed for Chrome's Install app / Share-target features
+(for example `tailscale serve --bg 3000`).
 
 ## Your data
 

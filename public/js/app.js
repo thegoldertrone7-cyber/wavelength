@@ -24,7 +24,49 @@ const localBadge = t => t && t.localId
   ? `<span class="qbadge${t.lossless ? ' ll' : ''}">${esc(localQualityText(t))}</span>`
   : '';
 
+const NATIVE = typeof window.AndroidBridge !== 'undefined';
+let nativeSeq = 0;
+const nativeCalls = new Map();
+
+window.wlNativeResult = (id, ok, data, error) => {
+  const call = nativeCalls.get(id);
+  if (!call) return;
+  nativeCalls.delete(id);
+  clearTimeout(call.timer);
+  if (!ok) {
+    call.reject(new Error(error || 'The phone could not complete that request'));
+    return;
+  }
+  if (data == null || data === '') { call.resolve(null); return; }
+  try { call.resolve(typeof data === 'string' ? JSON.parse(data) : data); }
+  catch { call.reject(new Error('The phone returned an invalid response')); }
+};
+
+function nativeCall(method, path, body) {
+  return new Promise((resolve, reject) => {
+    if (!NATIVE) { reject(new Error('Native bridge is unavailable')); return; }
+    const id = String(++nativeSeq);
+    const timer = setTimeout(() => {
+      if (!nativeCalls.has(id)) return;
+      nativeCalls.delete(id);
+      reject(new Error('The phone took too long to answer'));
+    }, 90000);
+    nativeCalls.set(id, { resolve, reject, timer });
+    try { window.AndroidBridge.request(id, method, path, body || ''); }
+    catch (e) {
+      clearTimeout(timer);
+      nativeCalls.delete(id);
+      reject(e);
+    }
+  });
+}
+
 const api = async (url, o = {}) => {
+  if (NATIVE && String(url).startsWith('/api/')) {
+    const body = o.json !== undefined ? JSON.stringify(o.json) : o.body;
+    if (body != null && typeof body !== 'string') throw new Error('That upload is not supported on the phone yet');
+    return nativeCall(o.method || (body !== undefined ? 'POST' : 'GET'), url, body || '');
+  }
   const h = { 'X-Wavelength': '1', ...o.headers }; let body = o.body;
   if (o.json !== undefined) { h['Content-Type'] = 'application/json'; body = JSON.stringify(o.json); }
   const r = await fetch(url, { method: o.method || (body !== undefined ? 'POST' : 'GET'), headers: h, body });
@@ -280,9 +322,11 @@ function ctxList(c) {
 /* ═════════ views ═════════ */
 function vHome() {
   const h = S.history.slice(0, 8), pls = S.playlists.slice(0, 6);
-  return `<div class="hero rise"><div class="hero-dots"></div><div class="eyebrow">Free · no ads · runs on your computer</div>
-    <h1 class="big">WAVE<br>LENGTH</h1><p>Bring your Spotify playlists over, play them ad-free, and download anything as MP3.</p>
-    <div class="acts"><button class="btn solid" data-go="import">${I.import}Import from Spotify</button><button class="btn" data-go="search">${I.search}Search music</button></div></div>
+  return `<div class="hero rise"><div class="hero-dots"></div><div class="eyebrow">${NATIVE ? 'On this phone · no ads · standalone' : 'Free · no ads · runs on your computer'}</div>
+    <h1 class="big">WAVE<br>LENGTH</h1><p>${NATIVE ? 'Search YouTube, play ad-free, and keep your playlists on this phone. A computer is optional.' : 'Bring your Spotify playlists over, play them ad-free, and download anything as MP3.'}</p>
+    <div class="acts">${NATIVE
+      ? `<button class="btn solid" data-go="search">${I.search}Search music</button><button class="btn" data-go="import">${I.import}Import a list</button>`
+      : `<button class="btn solid" data-go="import">${I.import}Import from Spotify</button><button class="btn" data-go="search">${I.search}Search music</button>`}</div></div>
     ${h.length ? `<div class="sec"><h2>Jump back in</h2></div><div class="grid">${h.map((t, i) => tile(art(t), t.title, t.artist, `data-act="playhist" data-i="${i}"`, i)).join('')}</div>` : ''}
     ${pls.length ? `<div class="sec"><h2>Your playlists</h2><a data-go="library">See all</a></div><div class="grid">${pls.map((p, i) => plTile(p, i)).join('')}</div>`
       : `<div class="sec"><h2>Start here</h2></div><div class="empty">No playlists yet. Import one from Spotify or create your own from the sidebar.</div>`}`;
@@ -386,7 +430,7 @@ function vPlaylist(id) {
       <div class="meta">${pl.tracks.length} songs · ${min} min${miss ? ` · ${miss} without a match` : ''}</div>
       <div class="acts"><button class="btn acc" data-act="playall" data-id="${id}">${I.playS}Play</button>
         <button class="btn" data-act="shufflepl" data-id="${id}">${I.shuffle}Shuffle</button>
-        <button class="btn" data-act="dlall" data-id="${id}">${I.dl}Download all</button>
+        ${NATIVE ? '' : `<button class="btn" data-act="dlall" data-id="${id}">${I.dl}Download all</button>`}
         ${isL ? '' : `<button class="btn" data-act="editpl" data-id="${pl.id}">${I.image}Edit</button><button class="btn dng" data-act="delpl" data-id="${pl.id}">${I.trash}Delete</button>`}
         ${un ? `<button class="btn" data-act="matchrest" data-id="${id}">Match ${un} remaining</button>` : ''}</div>
       <div class="matchbar${MQ.total ? ' on' : ''}" id="match-bar"><div class="lbl" id="match-lbl"></div><div class="dtw" style="pointer-events:none"><div class="dt"><i id="match-fill"></i></div></div></div>
@@ -395,6 +439,9 @@ function vPlaylist(id) {
 }
 
 function vLocal() {
+  if (NATIVE) {
+    return `<h1 class="ttl">Local files</h1><div class="box rise"><h2>Your own music is coming next</h2><p class="mut">YouTube search, playlists, sync and lock-screen controls work on this phone now. Playing files stored on the phone is the next standalone step.</p></div>`;
+  }
   if (!R.localReady && !R.localLoading) localLoad();
   if (!R.localReady) return `<h1 class="ttl">Local files</h1>${R.localError ? `<div class="empty">${esc(R.localError)}</div>` : loader()}`;
   const tracks = R.local;
@@ -417,6 +464,15 @@ function vLocal() {
 }
 
 function vImport() {
+  if (NATIVE) {
+    return `<h1 class="ttl">Import</h1>
+      <div class="imp-status" id="imp-status" role="status" aria-live="polite"></div>
+      <div class="box rise"><h2>Paste a list of songs</h2><p class="mut">One per line. Numbered lists, bullets, CSV rows and M3U files work too. Wavelength matches each song on YouTube before saving.</p>
+        <textarea class="inp" id="sp-list" placeholder="Helluva Boss - Hot Goss&#10;JT Music - After Hours" spellcheck="false" aria-label="Songs list"></textarea>
+        <div class="list-tools"><span class="meta" id="sp-list-count">Songs appear here as you paste</span><select class="inp" id="sp-order" aria-label="List format"><option value="artist">Artist – Song</option><option value="title">Song – Artist</option></select></div>
+        <div class="inline"><input class="inp" id="sp-list-name" placeholder="Playlist name" style="max-width:260px" aria-label="Playlist name"><button class="btn solid" data-act="imp-list">Preview list</button></div></div>
+      <p class="meta" style="margin-top:14px">Direct Spotify links and account import run on the computer for now. On the phone, paste the song names above.</p>`;
+  }
   const h = R.health || {}, sp = R.sp; let adv;
   if (!h.clientId) adv = `<ol class="steps"><li><span>Create an app at <b>developer.spotify.com/dashboard</b> and tick <b>Web API</b>.</span></li>
       <li><span>Add this <b>Redirect URI</b>:<br><span class="code" style="margin-top:8px">${esc(h.redirectUri || '')}</span> <button class="btn sm" data-act="copy-uri">Copy</button></span></li>
@@ -445,6 +501,9 @@ function vImport() {
 }
 
 function vDl() {
+  if (NATIVE) {
+    return `<h1 class="ttl">Downloads</h1><div class="box rise"><h2>Offline downloads</h2><p class="mut">Streaming, playlists, sync and lock-screen controls work on this phone now. Saving songs for offline listening is the next standalone step.</p></div>`;
+  }
   return `<h1 class="ttl">Downloads</h1><div class="box rise"><h2>Save any song as MP3</h2><p class="mut">Use the ••• menu on a song, or paste a YouTube link here. Files go to <b>${esc((R.health || {}).downloadDir || '~/Music/Wavelength')}</b>.</p>
     <div class="inline"><input class="inp" id="dl-url" placeholder="https://www.youtube.com/watch?v=…" spellcheck="false" aria-label="YouTube link"><button class="btn solid" data-act="dl-url">${I.dl}Download</button></div></div>
     <div class="sec"><h2>Queue</h2><a data-act="dl-clear">Clear finished</a></div><div id="dl-list">${dlList()}</div>`;
@@ -536,6 +595,7 @@ function pickLocalFiles() {
 async function uploadLocalFiles(files) {
   const list = (files || []).filter(Boolean);
   if (!list.length) return;
+  if (NATIVE) return toast('Local file import is not in this build yet; YouTube search and playlists work.');
   if (R.health && !R.health.ffprobe) return toast('Local files need ffprobe — run: brew install ffmpeg');
   let added = 0, failed = 0;
   for (const file of list) {
@@ -605,6 +665,12 @@ function syncHTML() {
       <div class="line"><div><div class="l">Send this library</div><div class="s">Replace the host's playlists, liked songs and history with this device's copy.</div></div><button class="btn" data-act="sync-push">Send changes</button></div>
       ${countLine}`;
   }
+  if (NATIVE) {
+    return `<div class="sync-hero"><div><span class="sync-badge"><i></i>Not set up</span><h3>This phone is its own music player.</h3><p class="mut">Join your computer's Wavelength host when you want to carry a library across devices. The computer is only needed during a sync.</p></div></div>
+      ${err}
+      <div class="sync-panel"><div class="eyebrow">Join a host</div><h3>Use the computer's library</h3><p class="mut">In Wavelength on the computer, open Settings → Devices, start hosting, then enter its address and pairing code below.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://192.168.1.20:38421" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
+      <p class="meta sync-note">Songs stream directly on the phone. Syncing only copies playlists, liked songs and history; it does not need the computer to stay on.</p>`;
+  }
   return `<div class="sync-hero"><div><span class="sync-badge"><i></i>Not set up</span><h3>Keep your library in step across Mac, Linux and Android.</h3><p class="mut">Choose one always-on device as the host. No account, no central server — just a short pairing code and your local network or Tailscale.</p></div></div>
     ${err}
     <div class="sync-options">
@@ -613,6 +679,13 @@ function syncHTML() {
     </div>`;
 }
 function accessHTML() {
+  if (NATIVE) {
+    return `<div class="access-box">
+      <div class="set-label">This phone</div>
+      <p class="mut">The library, search and playback all run on this device. Songs stream from YouTube over the internet; your playlists are stored in the app.</p>
+      <p class="meta sync-note">A computer is optional. Use <b>Devices</b> above to pull a library from a Wavelength host, then disconnect and keep listening with the computer off.</p>
+    </div>`;
+  }
   const h = R.health || {};
   const urls = Array.isArray(h.urls) ? h.urls : [];
   const enabled = urls.length > 0;
@@ -623,7 +696,7 @@ function accessHTML() {
         <div class="sync-urls">${urls.map(u => `<button class="sync-url" data-act="sync-copy" data-copy="${esc(u)}"><span>${esc(u)}</span>${I.copy}</button>`).join('')}</div>`
       : `<p class="mut">This player is only listening on this computer (127.0.0.1), so a phone cannot reach it yet.</p>
         <p class="mut">In the <b>desktop app</b>, this switches on automatically — reopen Settings → Devices once it has restarted. In browser mode, start the server with <code>HOST=0.0.0.0 ./start.sh</code>.</p>`}
-    <p class="meta sync-note"><b>Only use a network you trust.</b> Anyone who can reach this address can use your library. On Android, <code>127.0.0.1</code> means the phone itself, not your computer. The APK is a companion client and does not bundle the server, yt-dlp or ffmpeg.</p>
+    <p class="meta sync-note"><b>Only use a network you trust.</b> Anyone who can reach this address can use your library. On Android, <code>127.0.0.1</code> means the phone itself, not your computer.</p>
   </div>`;
 }
 async function syncLoad(force = false) {
@@ -715,29 +788,33 @@ function vSet() {
       <div class="read-demo"><b>Readable by default</b><span>Artist names, labels and small print get extra breathing room at larger sizes.</span></div></div>
     <div class="box rise" style="--i:2" id="set-feel"><h2>Motion &amp; sound</h2><p class="mut">Keep movement fluid without leaving effects running in the background.</p>
       <div class="line"><div><div class="l">Motion</div><div class="s">Reduce transitions and visual movement across the app.</div></div><select class="inp" data-set="motion" aria-label="Motion preference"><option value="system"${s.motion === 'reduced' ? '' : ' selected'}>Match system</option><option value="reduced"${s.motion === 'reduced' ? ' selected' : ''}>Reduced</option></select></div>
-      ${tg('viz', 'Show in full-screen player', 'Reacts to the real audio, not a fake animation.')}
-      <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div></div>
+      ${NATIVE ? '' : `${tg('viz', 'Show in full-screen player', 'Reacts to the real audio, not a fake animation.')}
+      <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>`}</div>
     <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs.')}
-      ${tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
+      ${NATIVE ? '' : tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
       <div class="line"><div><div class="l">Sleep timer</div><div class="s" id="sleep-status">${sleepText()}</div></div><select class="inp" data-set="sleep" aria-label="Sleep timer">${rem ? `<option value="active" selected>${sleepLabel(rem)} left</option>` : ''}<option value="0">Off</option>${sleepOpts}</select></div></div>
     <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div><div id="access-box">${accessHTML()}</div></div>
-    <div class="box rise" style="--i:3" id="set-storage"><h2>Downloads &amp; storage</h2>
+    ${NATIVE ? `<div class="box rise" style="--i:3" id="set-storage"><h2>Storage</h2>
+      <p class="mut">Playlists, liked songs and history live on this phone. Songs stream on demand and are not saved for offline listening yet.</p>
+      <div class="storage-box" id="storage-stats">${storageHTML()}</div>
+      <div class="line"><div><div class="l">Offline downloads</div><div class="s">Coming next. Streaming, sync and lock-screen controls work now.</div></div><button class="btn" data-go="downloads">Details</button></div></div>` : `<div class="box rise" style="--i:3" id="set-storage"><h2>Downloads &amp; storage</h2>
       <div class="line"><div class="l">MP3 quality</div><select class="inp" data-set="quality" aria-label="MP3 quality">${[128, 192, 256, 320].map(q => `<option${s.quality === q ? ' selected' : ''}>${q}</option>`).join('')}</select></div>
       <div class="line"><div class="l">Folder</div><div class="inline" style="flex:1;justify-content:flex-end"><input class="inp" id="dl-dir" value="${esc(h.downloadDir || '')}" aria-label="Download folder"><button class="btn" data-act="save-dir">Save</button></div></div>
       <div class="line"><div><div class="l">Lossless local files</div><div class="s">FLAC, WAV, AIFF and ALAC play untouched at their original quality.${R.localReady ? ` ${plural(R.local.length, 'file')} added.` : ''}</div></div><div class="acts" style="margin:0"><button class="btn solid" data-act="local-pick">${I.plus}Add files</button><button class="btn" data-act="local-scan">Rescan</button></div></div>
       ${h.localDir ? `<div class="line"><div><div class="l">Local folder</div><div class="s mono-break">${esc(h.localDir)}</div></div><button class="btn" data-go="local">Open</button></div>` : ''}
       <div class="storage-box" id="storage-stats">${storageHTML()}</div>
-      <div class="line"><div><div class="l">Playback cache</div><div class="s">Downloaded songs and covers stay. Only temporary stream files are cleared.</div></div><button class="btn" data-act="clear-cache">Clear cache</button></div></div>
-    <div class="box rise" style="--i:4" id="set-import"><h2>Spotify</h2><div class="line"><div><div class="l">Client ID</div><div class="s">${h.clientId ? esc(h.clientId.slice(0, 6)) + '…' : 'Not set'} · ${h.spotifyConnected ? 'connected' : 'not connected'}</div></div><button class="btn" data-go="import">Manage</button></div>
-      <div class="line"><div><div class="l">Importing</div><div class="s">Preview playlists, keep matched songs, and choose a cover before saving.</div></div><button class="btn" data-go="import">Open import</button></div></div>
+      <div class="line"><div><div class="l">Playback cache</div><div class="s">Downloaded songs and covers stay. Only temporary stream files are cleared.</div></div><button class="btn" data-act="clear-cache">Clear cache</button></div></div>`}
+    ${NATIVE ? `<div class="box rise" style="--i:4" id="set-import"><h2>Spotify import</h2><p class="mut">Spotify account import runs on the computer for now. On the phone you can paste a list of songs and match it on YouTube.</p><button class="btn" data-go="import">Paste a song list</button></div>` : `<div class="box rise" style="--i:4" id="set-import"><h2>Spotify</h2><div class="line"><div><div class="l">Client ID</div><div class="s">${h.clientId ? esc(h.clientId.slice(0, 6)) + '…' : 'Not set'} · ${h.spotifyConnected ? 'connected' : 'not connected'}</div></div><button class="btn" data-go="import">Manage</button></div>
+      <div class="line"><div><div class="l">Importing</div><div class="s">Preview playlists, keep matched songs, and choose a cover before saving.</div></div><button class="btn" data-go="import">Open import</button></div></div>`}
     <div class="box rise" style="--i:5" id="set-status"><h2>Status</h2>
       <div class="line"><div><div class="l">Keyboard shortcuts</div><div class="s">Open the full list with <b>?</b>.</div></div><button class="btn" data-act="shortcuts">${I.keyboard}Shortcuts</button></div>
       <div class="line"><div class="l">Version</div><div class="meta" id="set-version">${h.version ? 'v' + esc(h.version) : (R.stats && R.stats.version ? 'v' + esc(R.stats.version) : '—')}</div></div>
-      <div class="line"><div class="l">yt-dlp</div><div class="meta">${h.ytdlp ? esc(h.ytdlp) : 'missing — brew install yt-dlp'}</div></div>
+      <div class="line"><div class="l">${NATIVE ? 'Playback engine' : 'yt-dlp'}</div><div class="meta">${NATIVE ? 'NewPipeExtractor · direct YouTube audio' : (h.ytdlp ? esc(h.ytdlp) : 'missing — brew install yt-dlp')}</div></div>
+      ${NATIVE ? `<div class="line"><div class="l">Background audio</div><div class="meta">MediaSession + foreground notification</div></div>` : `
       <div class="line"><div class="l">ffmpeg</div><div class="meta">${h.ffmpeg ? esc(h.ffmpeg) : 'missing — brew install ffmpeg'}</div></div>
-      <div class="line"><div class="l">ffprobe</div><div class="meta">${h.ffprobe ? esc(h.ffprobe) : 'missing — brew install ffmpeg'}</div></div>
+      <div class="line"><div class="l">ffprobe</div><div class="meta">${h.ffprobe ? esc(h.ffprobe) : 'missing — brew install ffmpeg'}</div></div>`}
       <div class="line"><div class="l">Ads</div><div class="meta">None</div></div><div class="line"><div class="l">Price</div><div class="meta">Free</div></div></div></div>`;
 }
 
@@ -813,6 +890,7 @@ const audioEls = [audioA, audioB];
 let preparedNext = null;
 let actx, analyser, gain, freq, wave;
 function ensureGraph() {
+  if (NATIVE) return;
   if (actx) return;
   try {
     actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1034,9 +1112,22 @@ function updateTransport() {
 }
 
 const qualityParam = () => S.settings.streamQuality === 'saver' ? 'saver' : 'best';
-function trackSrc(t, attempt = 0, preload = false) {
+async function trackSrc(t, attempt = 0, preload = false) {
   if (!t) return '';
   if (t.localId) return '/api/local/' + encodeURIComponent(t.localId) + '/stream' + (attempt ? '?r=' + attempt : '');
+  if (NATIVE) {
+    try {
+      const r = await api('/api/stream/' + encodeURIComponent(t.ytId) + '?q=' + encodeURIComponent(qualityParam()) + (attempt ? '&r=' + attempt : ''));
+      if (!r || !r.url) throw new Error('No audio stream available');
+      return r.url;
+    } catch (e) {
+      if (attempt < 2) {
+        await sleep(700);
+        return trackSrc(t, attempt + 1, preload);
+      }
+      throw e;
+    }
+  }
   const u = new URL('/api/stream/' + encodeURIComponent(t.ytId), location.origin);
   u.searchParams.set('q', qualityParam());
   if (preload) u.searchParams.set('preload', '1');
@@ -1125,6 +1216,7 @@ function refreshQueue() {
 
 function prepareNext() {
   cancelPrepared();
+  if (NATIVE) return;
   if (!S.settings.gapless || !R.cur || R.repeat === 2) return;
   const idx = peekNextIdx(), t = R.queue[idx];
   if (!t) return;
@@ -1231,11 +1323,26 @@ async function doPlayTrack(t, my, attempt, startAt = 0) {
     try { el.removeAttribute('src'); el.load(); } catch {}
   }
   audio = audioA; spareAudio = audioB;
+  setBuffering(true);
+
+  // Resolve the direct audio URL. On Android this is an asynchronous bridge
+  // call into NewPipeExtractor; in the browser it is the local proxy path.
+  let src;
+  try {
+    src = await trackSrc(t, attempt);
+  } catch (e) {
+    if (my !== playTok) return;
+    loadingTrack = 0;
+    setBuffering(false);
+    toast(e.message || 'Could not find an audio stream');
+    skipBroken('Skipping "' + (R.cur && R.cur.title || t.title || 'this track') + '"');
+    return;
+  }
+  if (my !== playTok || !src) return;
 
   // Set new source — cache-bust on retry
-  audio.src = trackSrc(t, attempt);
+  audio.src = src;
   try { audio.load(); } catch {}
-  setBuffering(true);
   if (startAt > 0.5) {
     const seek = () => { try { if (!isFinite(audio.duration) || startAt < audio.duration - 1) audio.currentTime = startAt; } catch {} };
     if (audio.readyState >= 1) seek();
@@ -1332,7 +1439,7 @@ function pumpWarm() {
   if (warmBusy || !warmQ.length) return;
   const key = warmQ.shift(), [id, q] = key.split(':');
   warmBusy = true;
-  fetch('/api/warm/' + id + '?q=' + encodeURIComponent(q || 'best'), { headers: { 'X-Wavelength': '1' } })
+  api('/api/warm/' + id + '?q=' + encodeURIComponent(q || 'best'))
     .catch(() => {})
     .finally(() => {
       warmSeen.set(key, Date.now());
@@ -1404,7 +1511,9 @@ function setPlaying(p) {
   document.body.classList.toggle('playing', p);
   setDm(p);
   if (!p) { clearStall(); setBuffering(false); saveSession(true); }
-  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused';
+  if (NATIVE) {
+    try { window.AndroidBridge.setPlaybackState(!!p, audio.currentTime || 0, isFinite(audio.duration) ? audio.duration : (R.cur && R.cur.duration) || 0); } catch {}
+  } else if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused';
   updateTransport();
 }
 
@@ -1491,9 +1600,21 @@ function setVol(f) {
   S.settings.volume = f; R.muted = false; applyVol(); save();
 }
 function mediaSession() {
-  if (!('mediaSession' in navigator) || !R.cur) return;
+  if (!R.cur) return;
+  if (NATIVE) {
+    try {
+      window.AndroidBridge.setMediaMetadata(JSON.stringify({
+        title: R.cur.title || 'Wavelength',
+        artist: R.cur.artist || '',
+        album: R.cur.album || 'Wavelength',
+        art: R.cur.art || ''
+      }));
+    } catch {}
+    return;
+  }
+  if (!('mediaSession' in navigator)) return;
   const ms = navigator.mediaSession;
-  ms.metadata = new MediaMetadata({ title: R.cur.title, artist: R.cur.artist, album: R.cur.album || 'Wavelength', artwork: R.cur.art ? [{ src: R.cur.art, sizes: '512x512' }, { src: R.cur.art, sizes: '256x256' }] : [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
+  ms.metadata = new MediaMetadata({ title: R.cur.title, artist: R.cur.artist, album: R.cur.album || 'Wavelength', artwork: R.cur.art ? [{ src: R.cur.art, sizes: '512x512' }, { src: R.cur.art, sizes: '256x256' }] : [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
   const h = {
     play: () => { audio.play(); }, pause: () => audio.pause(), stop: () => audio.pause(),
     previoustrack: prev, nexttrack: () => { if (canNext()) next(); },
@@ -1505,9 +1626,35 @@ function mediaSession() {
 }
 let lastPos = -1;
 function mediaPos(c, d) {
+  if (NATIVE) {
+    if (!R.cur || Math.floor(c) === lastPos) return;
+    lastPos = Math.floor(c);
+    try { window.AndroidBridge.setPlaybackState(!!R.playing, c, d || 0); } catch {}
+    return;
+  }
   if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !d || !isFinite(d) || Math.floor(c) === lastPos) return;
   lastPos = Math.floor(c); try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: 1, position: Math.min(c, d) }); } catch {}
 }
+
+/* Commands from the lock screen, Bluetooth headset and notification. */
+window.wlNativeCmd = (cmd, arg) => {
+  if (cmd === 'play') {
+    if (!R.cur) { if (S.history.length) play(S.history, 0); return; }
+    if (audio.paused) togglePlay();
+  } else if (cmd === 'pause') {
+    audio.pause();
+  } else if (cmd === 'toggle') {
+    togglePlay();
+  } else if (cmd === 'next') {
+    next();
+  } else if (cmd === 'prev') {
+    prev();
+  } else if (cmd === 'seek') {
+    const d = isFinite(audio.duration) ? audio.duration : (R.cur && R.cur.duration) || 0;
+    audio.currentTime = Math.max(0, Math.min(+arg || 0, d || Infinity));
+    mediaPos(audio.currentTime, d);
+  }
+};
 
 /* ═════════ player UI ═════════ */
 /* ═════════ session memory ═════════ */
@@ -1987,6 +2134,7 @@ function updMatch() {
 
 /* ═════════ downloads ═════════ */
 async function download(t) {
+  if (NATIVE) return toast('Streaming works now. Offline downloads are the next standalone step.');
   if (t.localId) return toast('This file is already saved locally and plays at its original quality');
   if (R.health && !R.health.ffmpeg) return toast('MP3 needs ffmpeg — run: brew install ffmpeg');
   try {
@@ -2375,7 +2523,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) api('
   if (!THEME_GROUPS.some(g => g.items.some(([k]) => k === S.settings.theme))) S.settings.theme = 'dark';
   if (!STYLES.includes(S.settings.style)) S.settings.style = 'nothing';
   if (!['best', 'saver'].includes(S.settings.streamQuality)) S.settings.streamQuality = 'best';
-  if (!/Electron/.test(navigator.userAgent) && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['127.0.0.1', 'localhost'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if (!NATIVE && !/Electron/.test(navigator.userAgent) && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['127.0.0.1', 'localhost'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
   applyTheme(); applyMotion(); applyReading(); applyVol(); drawSide(); renderQueue(); updateTransport(); syncSleep(); vizSync(); updateSearchClear();
   await refreshHealth(); await route(); restoreSession(); localLoad(); syncLoad(); syncPoll();
 })();

@@ -1352,3 +1352,90 @@ html:is([data-read=large],[data-read=xl]) .qbadge{font-size:10px;padding:3px 8px
   .search-kbd{display:none}
   .st-meta{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 }
+
+/* ══════════════════════════════════════════════
+   PHONE LAYOUT — Galaxy S25+ / narrow Android
+   Two-up cards and a compact playlist header.
+══════════════════════════════════════════════ */
+@media (max-width:860px){
+  .view{padding:4px 12px 28px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+  .tile{padding:9px 9px 13px;border-radius:22px}
+  .tile .art,.tile .cover{border-radius:16px;margin-bottom:10px}
+  .tile .tt{font-size:14px;padding:0 2px}
+  html:is([data-read=large],[data-read=xl]) .tile .tt{font-size:15px}
+  .tile .ts{font-size:11px;padding:0 2px}
+  html:is([data-read=large],[data-read=xl]) .tile .ts{font-size:12px}
+  .tile .fab{right:15px;top:calc(100% - 88px);width:40px;height:40px}
+  .tile.new{min-height:180px}
+  .tile.genre{min-height:100px}
+
+  .hero{padding:25px 20px 23px;border-radius:26px}
+  .hero h1.big{font-size:clamp(46px,12.5vw,64px)}
+  .hero p{font-size:14px;line-height:1.55}
+  .hero .acts{margin-top:17px;gap:8px}
+
+  .top{padding:12px 12px 8px}
+  .row{grid-template-columns:28px minmax(0,1fr) 40px 40px;gap:8px;padding:8px}
+  .row .ib{width:40px;height:40px}
+  .row .ib svg{width:18px;height:18px}
+
+  .ph{
+    display:grid;
+    grid-template-columns:108px minmax(0,1fr);
+    grid-template-areas:"cover eyebrow" "cover title" "cover meta" "actions actions" "match match";
+    align-items:end;
+    gap:2px 16px;
+    margin:6px 0 20px;
+  }
+  .ph > .cover{grid-area:cover;width:108px;border-radius:24px;align-self:center}
+  .ph-r{display:contents}
+  .ph-r .eyebrow{grid-area:eyebrow;align-self:end}
+  .ph-r h1{grid-area:title;font-size:clamp(28px,8vw,38px);line-height:1.04;margin:3px 0 5px;overflow-wrap:anywhere}
+  .ph-r .meta{grid-area:meta}
+  .ph-r .acts{
+    grid-area:actions;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+    margin-top:14px;
+  }
+  .ph-r .acts .btn{
+    justify-content:center;
+    min-width:0;
+    min-height:42px;
+    padding:10px 8px;
+    font-size:11px;
+    letter-spacing:.05em;
+  }
+  .ph-r .acts .btn.acc{grid-column:1/-1}
+  .ph-r .matchbar{grid-area:match;max-width:none;margin-top:12px}
+
+  .search-top{padding:12px;gap:10px}
+  .st-art .art{width:58px;border-radius:17px}
+  .st-actions .ib{width:30px;height:30px}
+  .st-actions .ib svg{width:15px;height:15px}
+}
+
+@media (max-width:460px){
+  .view{padding:4px 10px 26px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{padding:8px 8px 12px;border-radius:20px}
+  .tile .art,.tile .cover{border-radius:14px;margin-bottom:9px}
+  .tile .tt{font-size:13px}
+  html:is([data-read=large],[data-read=xl]) .tile .tt{font-size:14px}
+  .tile .ts{font-size:10px}
+  html:is([data-read=large],[data-read=xl]) .tile .ts{font-size:11px}
+  .tile .fab{right:12px;top:calc(100% - 82px);width:38px;height:38px}
+  .tile.new{min-height:160px}
+
+  .ph{grid-template-columns:96px minmax(0,1fr);gap:2px 13px}
+  .ph > .cover{width:96px;border-radius:22px}
+  .ph-r h1{font-size:clamp(26px,8vw,34px)}
+  .ph-r .acts{gap:7px;margin-top:12px}
+  .ph-r .acts .btn{min-height:40px;padding:9px 6px;font-size:10.5px}
+
+  .hero{padding:22px 18px 21px}
+  .hero h1.big{font-size:clamp(44px,13.5vw,58px)}
+  .hero p{font-size:13.5px}
+}

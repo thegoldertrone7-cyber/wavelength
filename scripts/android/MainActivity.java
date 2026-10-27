@@ -1,157 +1,136 @@
 package app.wavelength.music;
 
-import android.app.AlertDialog;
+import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
-import android.graphics.PorterDuff;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.InputType;
-import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowManager;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.ScrollView;
-import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.webkit.WebViewAssetLoader;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.schabi.newpipe.extractor.InfoItem;
+import org.schabi.newpipe.extractor.MediaFormat;
+import org.schabi.newpipe.extractor.NewPipe;
+import org.schabi.newpipe.extractor.ServiceList;
+import org.schabi.newpipe.extractor.downloader.Downloader;
+import org.schabi.newpipe.extractor.downloader.Request;
+import org.schabi.newpipe.extractor.downloader.Response;
+import org.schabi.newpipe.extractor.search.SearchInfo;
+import org.schabi.newpipe.extractor.stream.AudioStream;
+import org.schabi.newpipe.extractor.stream.StreamInfo;
+import org.schabi.newpipe.extractor.stream.StreamInfoItem;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Enumeration;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 
 /**
- * Wavelength for Android is a companion client. It does not bundle the Node
- * server, yt-dlp or ffmpeg: it connects to Wavelength running on the user's
- * computer over the local network.
+ * Standalone Wavelength for Android.
  *
- * The native setup screen is deliberate. A bare WebView that loads an
- * unreachable http://127.0.0.1:3000 leaves Chromium's "Webpage not available"
- * page in front, which looks like the app is broken. Here the WebView is kept
- * hidden until a page actually loads, and every connection failure returns to
- * the branded setup screen with Retry / Change server / Cancel.
+ * The app serves the existing Wavelength interface from the APK, keeps its
+ * library on the phone, and talks to YouTube through NewPipeExtractor. A
+ * computer is only needed when the user explicitly syncs a library.
  */
 public class MainActivity extends AppCompatActivity {
-    private static final String PREFS = "wl";
-    private static final String KEY_URL = "server_url";
-    private static final int DESKTOP_PORT = 38421;
-    private static final int BROWSER_PORT = 3000;
-    private static final int LOAD_TIMEOUT_MS = 15000;
+    static final String PREFS = "wl";
+    static final String KEY_SERVER = "server_url";
+    static final String KEY_SYNC_URL = "sync_url";
+    static final String KEY_SYNC_CODE = "sync_code";
+    static final String KEY_SYNC_PEER = "sync_peer";
+    static final String KEY_SYNC_LAST = "sync_last";
+    static final String KEY_SYNC_REV = "sync_rev";
+    static final String START_URL = "https://appassets.androidplatform.net/assets/public/index.html";
+    static final String UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+        + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
-    private static final int C_BG = 0xFF000000;
-    private static final int C_CARD = 0xFF0D0D0E;
-    private static final int C_CARD2 = 0xFF171718;
-    private static final int C_LINE = 0xFF2A2A2E;
-    private static final int C_TEXT = 0xFFF4F4F4;
-    private static final int C_MUTED = 0xFF9B9BA1;
-    private static final int C_FAINT = 0xFF6B6B70;
-    private static final int C_ACCENT = 0xFFD71921;
-    private static final int C_ERROR = 0xFFFF8A80;
-
-    private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService scanPool = Executors.newSingleThreadExecutor();
+    private static final Object STATE_LOCK = new Object();
+    private static final Pattern YT_ID = Pattern.compile(
+        "(?:[?&]v=|/shorts/|/embed/|youtu\\.be/|/watch/)([A-Za-z0-9_-]{11})");
+    private static final Pattern BAD_TITLE = Pattern.compile(
+        "(?i)\\b(live|cover|remix|karaoke|reaction|instrumental|sped up|slowed|nightcore|8d|tutorial|lesson|mashup)\\b");
 
     private WebView wv;
-    private FrameLayout root;
-    private ScrollView setup;
-    private EditText input;
-    private TextView errorText;
-    private TextView statusText;
-    private TextView hintText;
-    private LinearLayout statusRow;
-    private ProgressBar spinner;
-    private Button connectBtn;
-    private Button scanBtn;
-    private Button cancelBtn;
-    private Button menuBtn;
-
-    private String lastGoodUrl = "";
-    private String pendingUrl = "";
+    private WebViewAssetLoader assetLoader;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService io = Executors.newFixedThreadPool(4);
+    private final Map<String, CacheEntry> searchCache = new ConcurrentHashMap<>();
+    private final Map<String, CacheEntry> streamCache = new ConcurrentHashMap<>();
+    private SharedPreferences prefs;
+    private File stateFile;
+    private boolean pageReady = false;
     private String pendingShare = null;
-    private String lastFailure = "";
-    private boolean pageFailed = false;
-    private boolean httpFailed = false;
-    private boolean setupVisible = true;
-    private boolean restoring = false;
-    private boolean scanning = false;
+    private static MainActivity current = null;
 
-    private int loadToken = 0;
-    private int scanGen = 0;
-
-    private final Runnable loadTimeout = () -> {
-        if (setupVisible) fail("No answer from " + prettyHost(pendingUrl)
-            + ". Make sure Wavelength is open, the computer is awake, and both devices are on the same Wi-Fi.");
-    };
+    private static final class CacheEntry {
+        final long at = System.currentTimeMillis();
+        final String value;
+        CacheEntry(String value) { this.value = value; }
+        boolean fresh(long ttl) { return System.currentTimeMillis() - at < ttl; }
+    }
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        root = new FrameLayout(this);
-        root.setBackgroundColor(C_BG);
-
+        current = this;
+        prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        stateFile = new File(getFilesDir(), "state.json");
+        ensureNewPipe();
+        requestNotificationPermission();
         buildWebView();
-        buildSetup();
-        buildMenuButton();
-
-        root.addView(wv, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(setup, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(menuBtn, menuParams());
-        setContentView(root);
-
+        setContentView(wv, new ViewGroup.LayoutParams(-1, -1));
         pendingShare = shareTarget(getIntent());
-        String saved = prefs().getString(KEY_URL, "");
-        if (saved.isEmpty()) {
-            showSetup(false, null);
-        } else {
-            input.setText(saved);
-            input.setSelection(input.length());
-            connectTo(saved);
+        wv.loadUrl(START_URL);
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            && !prefs.getBoolean("asked_notifications", false)) {
+            prefs.edit().putBoolean("asked_notifications", true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
         }
     }
 
-    /* ── WebView ─────────────────────────────────────────────────────── */
-
     private void buildWebView() {
         wv = new WebView(this);
-        wv.setBackgroundColor(C_BG);
+        wv.setBackgroundColor(0xFF000000);
         WebSettings ws = wv.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
@@ -161,659 +140,66 @@ public class MainActivity extends AppCompatActivity {
         ws.setCacheMode(WebSettings.LOAD_DEFAULT);
         ws.setSupportZoom(false);
         ws.setBuiltInZoomControls(false);
+        ws.setUserAgentString(UA);
+        if (Build.VERSION.SDK_INT >= 26) ws.setSafeBrowsingEnabled(false);
         wv.setWebChromeClient(new WebChromeClient());
-        wv.setWebViewClient(new WaveViewClient());
-        wv.addJavascriptInterface(new ServerBridge(), "AndroidBridge");
+        wv.addJavascriptInterface(new Bridge(), "AndroidBridge");
+
+        assetLoader = new WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+            .build();
+
+        wv.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return assetLoader.shouldInterceptRequest(request.getUrl());
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                pageReady = true;
+                applyPendingShare();
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return openExternal(request.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return openExternal(Uri.parse(url));
+            }
+
+            private boolean openExternal(Uri uri) {
+                if (uri == null) return false;
+                String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+                String host = uri.getHost() == null ? "" : uri.getHost();
+                if (host.equals("appassets.androidplatform.net")) return false;
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    // The only ordinary links in the interface are Spotify's
+                    // sign-in route and external song links. Keep the app's own
+                    // origin inside the app and hand everything else to Android.
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                    } catch (Exception ignored) {}
+                    return true;
+                }
+                return false;
+            }
+        });
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true);
     }
 
-    private class WaveViewClient extends WebViewClient {
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            super.onPageFinished(view, url);
-            if (url == null || pendingUrl.isEmpty() || !url.startsWith(pendingUrl)) return;
-            if (pageFailed || httpFailed) {
-                fail(lastFailure);
-                return;
-            }
-            if (setupVisible) {
-                lastGoodUrl = pendingUrl;
-                restoring = false;
-                prefs().edit().putString(KEY_URL, lastGoodUrl).apply();
-                hideSetup();
-            }
-            applyPendingShare();
-        }
-
-        @Override
-        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request != null && !request.isForMainFrame()) return;
-            String failed = request != null && request.getUrl() != null ? request.getUrl().toString() : pendingUrl;
-            if (!pendingUrl.isEmpty() && !failed.startsWith(pendingUrl)) return;
-            pageFailed = true;
-            lastFailure = describeError(error);
-            view.stopLoading();
-            fail(lastFailure);
-        }
-
-        @Override
-        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-            if (request == null || !request.isForMainFrame()) return;
-            int code = response == null ? 0 : response.getStatusCode();
-            if (code < 400) return;
-            String failed = request.getUrl() == null ? pendingUrl : request.getUrl().toString();
-            if (!pendingUrl.isEmpty() && !failed.startsWith(pendingUrl)) return;
-            httpFailed = true;
-            lastFailure = "That address answered with HTTP " + code
-                + ". Is it really the Wavelength server? The desktop app usually uses port " + DESKTOP_PORT + ".";
-        }
-
-        @Override
-        public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) {
-            handler.cancel();
-            pageFailed = true;
-            lastFailure = "The secure connection to that address failed. On a local network use http:// instead of https://.";
-            fail(lastFailure);
-        }
-
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            return handleUrl(request.getUrl());
-        }
-
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, String url) {
-            return handleUrl(Uri.parse(url));
-        }
-
-        private boolean handleUrl(Uri uri) {
-            if (uri == null) return false;
-            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-            // Keep http(s) — including the Spotify sign-in round trip — inside
-            // the app. Only hand non-web schemes to the system.
-            if (scheme.equals("http") || scheme.equals("https")) return false;
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, uri));
-            } catch (Exception ignored) {}
-            return true;
-        }
-    }
-
-    /* ── native setup screen ─────────────────────────────────────────── */
-
-    private void buildSetup() {
-        setup = new ScrollView(this);
-        setup.setFillViewport(true);
-        setup.setBackgroundColor(C_BG);
-
-        int pad = dp(26);
-        LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.CENTER_VERTICAL);
-        column.setPadding(pad, dp(40), pad, dp(28));
-        setup.addView(column, new ScrollView.LayoutParams(-1, -2));
-
-        TextView brand = new TextView(this);
-        brand.setText("WAVELENGTH");
-        brand.setTextColor(C_TEXT);
-        brand.setTextSize(28);
-        brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setLetterSpacing(0.28f);
-        brand.setGravity(Gravity.CENTER);
-        column.addView(brand, wrap());
-
-        TextView tagline = new TextView(this);
-        tagline.setText("Your music. Your computer. No ads.");
-        tagline.setTextColor(C_MUTED);
-        tagline.setTextSize(13);
-        tagline.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams tagLp = wrap();
-        tagLp.topMargin = dp(6);
-        column.addView(tagline, tagLp);
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(20), dp(20), dp(20), dp(20));
-        card.setBackground(round(C_CARD, C_LINE, 24, 1));
-        int cardWidth = Math.min(getResources().getDisplayMetrics().widthPixels - dp(52), dp(520));
-        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(cardWidth, -2);
-        cardLp.gravity = Gravity.CENTER_HORIZONTAL;
-        cardLp.topMargin = dp(28);
-        column.addView(card, cardLp);
-
-        TextView intro = new TextView(this);
-        intro.setText("Connect to Wavelength on your computer");
-        intro.setTextColor(C_TEXT);
-        intro.setTextSize(17);
-        intro.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(intro, wrap());
-
-        TextView sub = new TextView(this);
-        sub.setText("Install Wavelength on a Mac, PC or Linux computer, open it, then connect this phone over the same Wi-Fi.");
-        sub.setTextColor(C_MUTED);
-        sub.setTextSize(12);
-        sub.setLineSpacing(0f, 1.25f);
-        LinearLayout.LayoutParams subLp = wrap();
-        subLp.topMargin = dp(7);
-        subLp.bottomMargin = dp(18);
-        card.addView(sub, subLp);
-
-        TextView label = new TextView(this);
-        label.setText("COMPUTER ADDRESS");
-        label.setTextColor(C_MUTED);
-        label.setTextSize(10);
-        label.setLetterSpacing(0.13f);
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams labelLp = wrap();
-        labelLp.bottomMargin = dp(8);
-        card.addView(label, labelLp);
-
-        input = new EditText(this);
-        input.setSingleLine(true);
-        input.setTextColor(C_TEXT);
-        input.setHintTextColor(C_FAINT);
-        input.setTextSize(16);
-        input.setHint("192.168.1.10:38421");
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setImeOptions(EditorInfo.IME_ACTION_GO);
-        input.setSelectAllOnFocus(true);
-        input.setPadding(dp(14), dp(12), dp(14), dp(12));
-        input.setBackground(round(C_CARD2, C_LINE, 14, 1));
-        input.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                connectFromInput();
-                return true;
-            }
-            return false;
-        });
-        card.addView(input, new LinearLayout.LayoutParams(-1, dp(52)));
-
-        hintText = new TextView(this);
-        hintText.setText("Desktop app: port " + DESKTOP_PORT + "  ·  Browser mode: port " + BROWSER_PORT);
-        hintText.setTextColor(C_FAINT);
-        hintText.setTextSize(11);
-        LinearLayout.LayoutParams hintLp = wrap();
-        hintLp.topMargin = dp(8);
-        card.addView(hintText, hintLp);
-
-        errorText = new TextView(this);
-        errorText.setTextColor(C_ERROR);
-        errorText.setTextSize(12);
-        errorText.setLineSpacing(0f, 1.25f);
-        errorText.setVisibility(View.GONE);
-        LinearLayout.LayoutParams errLp = wrap();
-        errLp.topMargin = dp(12);
-        card.addView(errorText, errLp);
-
-        statusRow = new LinearLayout(this);
-        statusRow.setOrientation(LinearLayout.HORIZONTAL);
-        statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        statusRow.setVisibility(View.GONE);
-        spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
-        spinner.setIndeterminate(true);
-        if (spinner.getIndeterminateDrawable() != null) {
-            spinner.getIndeterminateDrawable().setColorFilter(C_ACCENT, PorterDuff.Mode.SRC_IN);
-        }
-        LinearLayout.LayoutParams spinLp = new LinearLayout.LayoutParams(dp(18), dp(18));
-        statusRow.addView(spinner, spinLp);
-        statusText = new TextView(this);
-        statusText.setTextColor(C_MUTED);
-        statusText.setTextSize(12);
-        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(-1, -2);
-        statusLp.leftMargin = dp(10);
-        statusRow.addView(statusText, statusLp);
-        LinearLayout.LayoutParams rowLp = wrap();
-        rowLp.topMargin = dp(12);
-        card.addView(statusRow, rowLp);
-
-        connectBtn = makeButton("Connect", true);
-        LinearLayout.LayoutParams connectLp = new LinearLayout.LayoutParams(-1, dp(52));
-        connectLp.topMargin = dp(16);
-        connectBtn.setOnClickListener(v -> connectFromInput());
-        card.addView(connectBtn, connectLp);
-
-        scanBtn = makeButton("Find my computer", false);
-        LinearLayout.LayoutParams scanLp = new LinearLayout.LayoutParams(-1, dp(50));
-        scanLp.topMargin = dp(10);
-        scanBtn.setOnClickListener(v -> findComputer());
-        card.addView(scanBtn, scanLp);
-
-        cancelBtn = makeButton("Back to player", false);
-        cancelBtn.setTextColor(C_MUTED);
-        cancelBtn.setBackgroundColor(Color.TRANSPARENT);
-        cancelBtn.setVisibility(View.GONE);
-        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(-1, dp(44));
-        cancelLp.topMargin = dp(6);
-        cancelBtn.setOnClickListener(v -> cancelSetup());
-        card.addView(cancelBtn, cancelLp);
-
-        TextView note = new TextView(this);
-        note.setText("Only use a network you trust — anyone who can reach this address can use your library. "
-            + "On Android, 127.0.0.1 means this phone itself. This app is a companion client: the server, yt-dlp and ffmpeg stay on your computer.");
-        note.setTextColor(C_FAINT);
-        note.setTextSize(11);
-        note.setLineSpacing(0f, 1.3f);
-        LinearLayout.LayoutParams noteLp = new LinearLayout.LayoutParams(cardWidth, -2);
-        noteLp.gravity = Gravity.CENTER_HORIZONTAL;
-        noteLp.topMargin = dp(20);
-        column.addView(note, noteLp);
-    }
-
-    private void buildMenuButton() {
-        menuBtn = new Button(this);
-        menuBtn.setText("\u22ee");
-        menuBtn.setTextSize(22);
-        menuBtn.setTextColor(C_TEXT);
-        menuBtn.setAllCaps(false);
-        menuBtn.setPadding(0, 0, 0, 0);
-        menuBtn.setMinWidth(0);
-        menuBtn.setMinimumWidth(0);
-        menuBtn.setMinHeight(0);
-        menuBtn.setMinimumHeight(0);
-        menuBtn.setElevation(0);
-        menuBtn.setBackground(round(0xE6171718, C_LINE, 22, 1));
-        menuBtn.setContentDescription("Change Wavelength server");
-        menuBtn.setVisibility(View.GONE);
-        menuBtn.setOnClickListener(v -> showSetup(true, null));
-    }
-
-    private FrameLayout.LayoutParams menuParams() {
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(42), dp(42));
-        lp.gravity = Gravity.TOP | Gravity.END;
-        lp.topMargin = dp(10);
-        lp.rightMargin = dp(10);
-        return lp;
-    }
-
-    private Button makeButton(String text, boolean filled) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(15);
-        b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setPadding(dp(16), 0, dp(16), 0);
-        b.setElevation(0);
-        if (filled) {
-            b.setTextColor(Color.WHITE);
-            b.setBackground(round(C_ACCENT, C_ACCENT, 14, 0));
-        } else {
-            b.setTextColor(C_TEXT);
-            b.setBackground(round(C_CARD2, C_LINE, 14, 1));
-        }
-        return b;
-    }
-
-    /* ── connection state ────────────────────────────────────────────── */
-
-    private void connectFromInput() {
-        if (scanning) cancelScan();
-        String raw = input.getText().toString();
-        String url;
-        try {
-            url = normalizeAddress(raw);
-        } catch (IllegalArgumentException e) {
-            input.setError(e.getMessage());
-            showError(e.getMessage());
-            setStatus(null, false);
-            connectBtn.setEnabled(true);
-            scanBtn.setEnabled(true);
-            return;
-        }
-        connectTo(url);
-    }
-
-    private void connectTo(String url) {
-        cancelScan();
-        hideKeyboard();
-        pendingUrl = url;
-        input.setText(url);
-        input.setSelection(input.length());
-        input.setError(null);
-        clearError();
-        setupVisible = true;
-        restoring = false;
-        wv.setVisibility(View.GONE);
-        setup.setVisibility(View.VISIBLE);
-        menuBtn.setVisibility(View.GONE);
-        cancelBtn.setVisibility(lastGoodUrl.isEmpty() ? View.GONE : View.VISIBLE);
-        connectBtn.setEnabled(false);
-        scanBtn.setEnabled(false);
-        connectBtn.setText("Connect");
-        pageFailed = false;
-        httpFailed = false;
-        lastFailure = "";
-        setStatus("Connecting to " + url + "\u2026", true);
-        ++loadToken;
-        main.removeCallbacks(loadTimeout);
-        main.postDelayed(loadTimeout, LOAD_TIMEOUT_MS);
-        wv.stopLoading();
-        wv.loadUrl(url + "/");
-    }
-
-    private void showSetup(boolean canCancel, String message) {
-        cancelScan();
-        loadToken++;
-        main.removeCallbacks(loadTimeout);
-        setupVisible = true;
-        wv.setVisibility(View.GONE);
-        setup.setVisibility(View.VISIBLE);
-        menuBtn.setVisibility(View.GONE);
-        cancelBtn.setVisibility(canCancel && !lastGoodUrl.isEmpty() ? View.VISIBLE : View.GONE);
-        connectBtn.setText("Connect");
-        connectBtn.setEnabled(true);
-        scanBtn.setEnabled(true);
-        clearError();
-        if (message != null) setStatus(message, false); else setStatus(null, false);
-        String current = input.getText().toString().trim();
-        if (current.isEmpty()) {
-            String saved = prefs().getString(KEY_URL, "");
-            if (!saved.isEmpty()) input.setText(saved);
-        }
-        input.setSelection(input.getText().length());
-    }
-
-    private void hideSetup() {
-        main.removeCallbacks(loadTimeout);
-        setupVisible = false;
-        setup.setVisibility(View.GONE);
-        wv.setVisibility(View.VISIBLE);
-        menuBtn.setVisibility(View.VISIBLE);
-        hideKeyboard();
-    }
-
-    private void cancelSetup() {
-        hideKeyboard();
-        if (lastGoodUrl.isEmpty()) {
-            showSetup(false, null);
-            return;
-        }
-        cancelScan();
-        restoring = true;
-        pendingUrl = lastGoodUrl;
-        input.setText(lastGoodUrl);
-        pageFailed = false;
-        httpFailed = false;
-        lastFailure = "";
-        hideSetup();
-        wv.loadUrl(lastGoodUrl + "/");
-    }
-
-    private void fail(String message) {
-        if (isFinishing() || isDestroyed()) return;
-        main.removeCallbacks(loadTimeout);
-        setupVisible = true;
-        wv.setVisibility(View.GONE);
-        setup.setVisibility(View.VISIBLE);
-        menuBtn.setVisibility(View.GONE);
-        connectBtn.setText("Retry");
-        connectBtn.setEnabled(true);
-        scanBtn.setEnabled(true);
-        cancelBtn.setVisibility((!lastGoodUrl.isEmpty() && !restoring) ? View.VISIBLE : View.GONE);
-        setStatus(null, false);
-        showError(message == null || message.isEmpty()
-            ? "Couldn't reach " + prettyHost(pendingUrl) + ". Check the address and try again."
-            : message);
-    }
-
-    private void setStatus(String message, boolean busy) {
-        if (message == null || message.isEmpty()) {
-            statusRow.setVisibility(View.GONE);
-            return;
-        }
-        statusRow.setVisibility(View.VISIBLE);
-        statusText.setText(message);
-        spinner.setVisibility(busy ? View.VISIBLE : View.GONE);
-    }
-
-    private void showError(String message) {
-        errorText.setText(message);
-        errorText.setVisibility(View.VISIBLE);
-    }
-
-    private void clearError() {
-        errorText.setText("");
-        errorText.setVisibility(View.GONE);
-    }
-
-    /* ── address parsing ─────────────────────────────────────────────── */
-
-    static String normalizeAddress(String raw) {
-        String s = raw == null ? "" : raw.trim();
-        if (s.isEmpty()) throw new IllegalArgumentException("Enter your computer's address, or tap Find my computer.");
-        s = s.replaceAll("\\s+", "");
-        if (!s.matches("(?i)^[a-z][a-z0-9+.-]*://.*")) s = "http://" + s;
-
-        Uri u;
-        try {
-            u = Uri.parse(s);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("That doesn't look like an address. Try 192.168.1.10:" + DESKTOP_PORT + ".");
-        }
-        String scheme = u.getScheme() == null ? "http" : u.getScheme().toLowerCase(Locale.ROOT);
-        if (!scheme.equals("http") && !scheme.equals("https")) {
-            throw new IllegalArgumentException("Use an http:// address. Wavelength runs over plain HTTP on your local network.");
-        }
-        String host = u.getHost();
-        if (host == null || host.isEmpty()) {
-            throw new IllegalArgumentException("That doesn't look like an address. Try 192.168.1.10:" + DESKTOP_PORT + ".");
-        }
-        host = host.toLowerCase(Locale.ROOT).replaceAll("^\\[|\\]$", "");
-        if (host.equals("localhost") || host.equals("::1") || host.equals("0.0.0.0") || host.startsWith("127.")) {
-            throw new IllegalArgumentException("127.0.0.1 / localhost means this phone itself, not your computer. "
-                + "Enter the computer's Wi-Fi address from Wavelength \u2192 Settings \u2192 Devices (for example 192.168.1.10:" + DESKTOP_PORT + ").");
-        }
-        int port = u.getPort();
-        if (port == -1) port = scheme.equals("https") ? 443 : DESKTOP_PORT;
-        if (port < 1 || port > 65535) {
-            throw new IllegalArgumentException("The port must be between 1 and 65535.");
-        }
-        String hostOut = host.contains(":") ? "[" + host + "]" : host;
-        return scheme + "://" + hostOut + ":" + port;
-    }
-
-    private static int portOf(String raw) {
-        if (raw == null) return -1;
-        String s = raw.trim();
-        if (s.isEmpty()) return -1;
-        if (!s.matches("(?i)^[a-z][a-z0-9+.-]*://.*")) s = "http://" + s;
-        try {
-            int p = Uri.parse(s).getPort();
-            return p > 0 && p <= 65535 ? p : -1;
-        } catch (Exception e) {
-            return -1;
-        }
-    }
-
-    private static String prettyHost(String url) {        if (url == null || url.isEmpty()) return "that address";
-        try {
-            Uri u = Uri.parse(url);
-            String h = u.getHost();
-            if (h == null || h.isEmpty()) return url;
-            return h + (u.getPort() > 0 ? ":" + u.getPort() : "");
-        } catch (Exception e) {
-            return url;
-        }
-    }
-
-    private String describeError(WebResourceError error) {
-        int code = error == null ? -1 : error.getErrorCode();
-        switch (code) {
-            case WebViewClient.ERROR_HOST_LOOKUP:
-                return "Can't find " + prettyHost(pendingUrl)
-                    + ". Check the address, and that the phone and computer are on the same Wi-Fi.";
-            case WebViewClient.ERROR_CONNECT:
-                return "The connection to " + prettyHost(pendingUrl)
-                    + " was refused. Is Wavelength open on the computer, and allowed through its firewall?";
-            case WebViewClient.ERROR_TIMEOUT:
-                return "The computer didn't answer in time. Check it is awake, on the same Wi-Fi, and that Wavelength is open.";
-            case WebViewClient.ERROR_UNSUPPORTED_SCHEME:
-                return "That address used a scheme Wavelength can't open. Use http:// or https://.";
-            case WebViewClient.ERROR_FAILED_SSL_HANDSHAKE:
-                return "The secure connection failed. On a local network use http:// instead of https://.";
-            case WebViewClient.ERROR_FILE_NOT_FOUND:
-            case WebViewClient.ERROR_FILE:
-                return "The server answered, but not with the Wavelength player. Is this the right address and port?";
-            default:
-                String desc = error == null || error.getDescription() == null ? "" : error.getDescription().toString();
-                return "Couldn't reach " + prettyHost(pendingUrl)
-                    + (desc.isEmpty() ? "." : " (" + desc + ").")
-                    + " Check the address and the computer's firewall, then try again.";
-        }
-    }
-
-    /* ── LAN discovery ───────────────────────────────────────────────── */
-
-    private void findComputer() {
-        if (scanning) return;
-        final String local = localIpv4();
-        if (local == null) {
-            showError("No Wi-Fi network found. Connect this phone to the same Wi-Fi as your computer, then try again.");
-            return;
-        }
-        final String prefix = local.substring(0, local.lastIndexOf('.') + 1);
-        final int gen = ++scanGen;
-        scanning = true;
-        clearError();
-        scanBtn.setEnabled(false);
-        connectBtn.setEnabled(false);
-
-        // Scan the two default ports plus whatever port is currently in use,
-        // so custom desktop/browser ports are discoverable too.
-        final Set<Integer> ports = new LinkedHashSet<>();
-        ports.add(DESKTOP_PORT);
-        ports.add(BROWSER_PORT);
-        for (String candidate : new String[]{pendingUrl, lastGoodUrl, prefs().getString(KEY_URL, ""), input.getText().toString()}) {
-            int p = portOf(candidate);
-            if (p > 0) ports.add(p);
-        }
-        setStatus("Scanning " + prefix + "0\u2013255 for Wavelength\u2026 this can take up to 30 seconds.", true);
-
-        scanPool.execute(() -> {
-            final Set<String> found = Collections.synchronizedSet(new LinkedHashSet<>());
-            ExecutorService inner = Executors.newFixedThreadPool(32);
-            List<Future<?>> tasks = new ArrayList<>();
-            for (int i = 1; i <= 254; i++) {
-                final String host = prefix + i;
-                for (final int port : ports) {
-                    tasks.add(inner.submit(() -> {
-                        if (gen != scanGen) return;
-                        if (healthOk(host, port) && gen == scanGen) found.add("http://" + host + ":" + port);
-                    }));
-                }
-            }
-            for (Future<?> f : tasks) {
-                try { f.get(); } catch (Exception ignored) {}
-            }
-            inner.shutdownNow();
-            final List<String> results = new ArrayList<>(found);
-            Collections.sort(results);
-            main.post(() -> {
-                if (isFinishing() || isDestroyed() || gen != scanGen) return;
-                scanning = false;
-                connectBtn.setEnabled(true);
-                scanBtn.setEnabled(true);
-                if (results.isEmpty()) {
-                    setStatus(null, false);
-                    showError("No Wavelength server found on this Wi-Fi. Open Wavelength on your computer, "
-                        + "keep both devices on the same network, then try again — or type the address shown in "
-                        + "Settings \u2192 Devices.");
-                } else if (results.size() == 1) {
-                    setStatus("Found " + results.get(0), false);
-                    input.setText(results.get(0));
-                    connectFromInput();
-                } else {
-                    setStatus("Found " + results.size() + " servers", false);
-                    chooseServer(results);
-                }
-            });
-        });
-    }
-
-    private void chooseServer(final List<String> urls) {
-        final String[] labels = urls.toArray(new String[0]);
-        new AlertDialog.Builder(this)
-            .setTitle("Choose your computer")
-            .setItems(labels, (dialog, which) -> {
-                input.setText(labels[which]);
-                connectFromInput();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
-    }
-
-    private void cancelScan() {
-        scanGen++;
-        scanning = false;
-    }
-
-    private static boolean healthOk(String host, int port) {
-        HttpURLConnection conn = null;
-        try {
-            URL u = new URL("http://" + host + ":" + port + "/api/health");
-            conn = (HttpURLConnection) u.openConnection();
-            conn.setConnectTimeout(350);
-            conn.setReadTimeout(900);
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("Accept", "application/json");
-            if (conn.getResponseCode() != 200) return false;
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));
-            StringBuilder body = new StringBuilder();
-            char[] buf = new char[1024];
-            int n;
-            while ((n = reader.read(buf)) != -1 && body.length() < 8192) body.append(buf, 0, n);
-            reader.close();
-            return body.indexOf("\"version\"") >= 0;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-    }
-
-    private static String localIpv4() {
-        String fallback = null;
-        try {
-            Enumeration<NetworkInterface> ifs = NetworkInterface.getNetworkInterfaces();
-            while (ifs != null && ifs.hasMoreElements()) {
-                NetworkInterface ni = ifs.nextElement();
-                if (!ni.isUp() || ni.isLoopback()) continue;
-                Enumeration<InetAddress> addrs = ni.getInetAddresses();
-                while (addrs.hasMoreElements()) {
-                    InetAddress a = addrs.nextElement();
-                    if (!(a instanceof Inet4Address) || a.isLoopbackAddress() || a.isLinkLocalAddress()) continue;
-                    String ip = a.getHostAddress();
-                    if (ip == null || ip.isEmpty()) continue;
-                    if (ip.startsWith("192.168.") || ip.startsWith("10.") || is172Private(ip)) return ip;
-                    if (fallback == null) fallback = ip;
-                }
-            }
-        } catch (Exception ignored) {}
-        return fallback;
-    }
-
-    private static boolean is172Private(String ip) {
-        if (!ip.startsWith("172.")) return false;
-        try {
-            int second = Integer.parseInt(ip.split("\\.")[1]);
-            return second >= 16 && second <= 31;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /* ── intents, lifecycle, bridge ──────────────────────────────────── */
+    /* ── lifecycle / sharing ────────────────────────────────────────── */
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        String text = shareTarget(intent);
-        if (text == null) return;
-        if (setupVisible || lastGoodUrl.isEmpty()) {
-            pendingShare = text;
-        } else {
-            wv.loadUrl(lastGoodUrl + "/#share/" + Uri.encode(text));
-        }
+        pendingShare = shareTarget(intent);
+        applyPendingShare();
     }
 
     private static String shareTarget(Intent intent) {
@@ -829,87 +215,638 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void applyPendingShare() {
-        if (pendingShare == null || lastGoodUrl.isEmpty() || setupVisible) return;
+        if (!pageReady || pendingShare == null || wv == null) return;
         String text = pendingShare;
         pendingShare = null;
-        wv.loadUrl(lastGoodUrl + "/#share/" + Uri.encode(text));
+        String js = "location.hash=" + JSONObject.quote("#share/" + Uri.encode(text)) + ";";
+        wv.evaluateJavascript(js, null);
     }
 
     @Override
     public void onBackPressed() {
-        if (setupVisible) {
-            if (!lastGoodUrl.isEmpty() && !restoring) {
-                cancelSetup();
-                return;
-            }
-            super.onBackPressed();
-            return;
-        }
-        if (wv.canGoBack()) wv.goBack(); else super.onBackPressed();
+        if (wv != null && wv.canGoBack()) wv.goBack();
+        else super.onBackPressed();
     }
 
     @Override
     protected void onDestroy() {
-        main.removeCallbacksAndMessages(null);
-        scanPool.shutdownNow();
-        cancelScan();
-        if (!lastGoodUrl.isEmpty()) prefs().edit().putString(KEY_URL, lastGoodUrl).apply();
+        if (current == this) current = null;
+        if (isFinishing()) PlaybackService.stop(this);
         if (wv != null) {
             wv.stopLoading();
-            wv.loadUrl("about:blank");
             wv.destroy();
         }
+        io.shutdownNow();
         super.onDestroy();
     }
 
-    private SharedPreferences prefs() {
-        return getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    static void sendNativeCommand(String cmd, double arg) {
+        MainActivity a = current;
+        if (a == null || a.wv == null) return;
+        a.runOnUiThread(() -> a.wv.evaluateJavascript(
+            "window.wlNativeCmd&&window.wlNativeCmd(" + JSONObject.quote(cmd) + "," + arg + ")",
+            null));
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    /* ── bridge ─────────────────────────────────────────────────────── */
 
-    private static LinearLayout.LayoutParams wrap() {
-        return new LinearLayout.LayoutParams(-1, -2);
-    }
-
-    private GradientDrawable round(int fill, int stroke, int radiusDp, int strokeDp) {
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(fill);
-        d.setCornerRadius(dp(radiusDp));
-        if (strokeDp > 0) d.setStroke(dp(strokeDp), stroke);
-        return d;
-    }
-
-    private void hideKeyboard() {
-        try {
-            View focus = getCurrentFocus();
-            if (focus != null) {
-                InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (imm != null) imm.hideSoftInputFromWindow(focus.getWindowToken(), 0);
-                focus.clearFocus();
-            }
-        } catch (Exception ignored) {}
-    }
-
-    class ServerBridge {
+    class Bridge {
         @JavascriptInterface
-        public String getServerUrl() {
-            return prefs().getString(KEY_URL, "");
+        public void request(String id, String method, String path, String body) {
+            io.execute(() -> {
+                boolean ok = true;
+                String data = null;
+                String error = null;
+                try {
+                    data = handleApi(method == null ? "GET" : method, path == null ? "/" : path,
+                        body == null ? "" : body);
+                } catch (Exception e) {
+                    ok = false;
+                    error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                }
+                final boolean fok = ok;
+                final String fdata = data;
+                final String ferror = error;
+                main.post(() -> {
+                    if (wv == null) return;
+                    String js = "window.wlNativeResult(" + JSONObject.quote(id) + ","
+                        + (fok ? "true" : "false") + ","
+                        + (fdata == null ? "null" : JSONObject.quote(fdata)) + ","
+                        + (ferror == null ? "null" : JSONObject.quote(ferror)) + ");";
+                    wv.evaluateJavascript(js, null);
+                });
+            });
         }
 
         @JavascriptInterface
-        public void setServerUrl(String url) {
+        public void setMediaMetadata(String json) {
+            PlaybackService.pushMetadata(MainActivity.this, json);
+        }
+
+        @JavascriptInterface
+        public void setPlaybackState(boolean playing, double position, double duration) {
+            PlaybackService.pushState(MainActivity.this, playing, position, duration);
+        }
+
+        @JavascriptInterface
+        public void clearMedia() {
+            PlaybackService.stop(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void openUrl(String url) {
             try {
-                String normalized = normalizeAddress(url);
-                prefs().edit().putString(KEY_URL, normalized).apply();
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
             } catch (Exception ignored) {}
         }
 
         @JavascriptInterface
-        public void openSetup() {
-            runOnUiThread(() -> showSetup(true, null));
+        public void toast(String text) {
+            main.post(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
         }
+
+        @JavascriptInterface
+        public String platform() {
+            return "android";
+        }
+
+        @JavascriptInterface
+        public String version() {
+            return BuildConfig.VERSION_NAME;
+        }
+    }
+
+    /* ── local API used by the bundled interface ─────────────────────── */
+
+    private String handleApi(String method, String path, String body) throws Exception {
+        Uri u = Uri.parse(path.startsWith("http") ? path : "http://wavelength.local" + path);
+        String p = u.getPath() == null ? "" : u.getPath();
+        String m = method.toUpperCase(Locale.ROOT);
+
+        if ("/api/health".equals(p)) return health().toString();
+        if ("/api/state".equals(p)) {
+            if ("PUT".equals(m)) {
+                writeState(body);
+                return "{}";
+            }
+            return readState();
+        }
+        if ("/api/search".equals(p)) return search(u.getQueryParameter("q"));
+        if ("/api/match".equals(p)) return match(new JSONObject(body == null || body.isEmpty() ? "{}" : body));
+        if (p.startsWith("/api/related/")) return related(p.substring("/api/related/".length()));
+
+        if (p.startsWith("/api/stream/")) {
+            String id = p.substring("/api/stream/".length());
+            return stream(id, u.getQueryParameter("q"));
+        }
+        if (p.startsWith("/api/warm/")) {
+            String id = p.substring("/api/warm/".length());
+            resolveAudio(id, u.getQueryParameter("q"));
+            return "{}";
+        }
+        if (p.startsWith("/api/cached/")) return new JSONObject().put("cached", false).toString();
+        if ("/api/local".equals(p)) return "[]";
+        if ("/api/stats".equals(p)) return stats().toString();
+        if ("/api/config".equals(p)) {
+            if ("PUT".equals(m)) return "{}";
+            return new JSONObject().put("downloadDir", "").put("localDir", "").toString();
+        }
+        if ("/api/downloads".equals(p)) return "[]";
+        if ("/api/downloads/clear".equals(p)) return "{}";
+        if ("/api/download".equals(p)) {
+            throw new Exception("Downloads are not in this standalone build yet. Streaming and sync work.");
+        }
+        if ("/api/cache/clear".equals(p)) return stats().toString();
+        if ("/api/token".equals(p)) return new JSONObject().put("token", "").toString();
+        if ("/api/share-test".equals(p)) return "{}";
+
+        if (p.startsWith("/api/spotify/")) {
+            throw new Exception("Spotify import is not available in the standalone Android build yet.");
+        }
+
+        if ("/api/sync/status".equals(p)) return syncStatus().toString();
+        if ("/api/sync/join".equals(p)) return syncJoin(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
+        if ("/api/sync/pull".equals(p)) return syncPull().toString();
+        if ("/api/sync/push".equals(p)) return syncPush().toString();
+        if ("/api/sync/disconnect".equals(p)) return syncDisconnect().toString();
+        if ("/api/sync/host".equals(p)) {
+            throw new Exception("Host from the computer, then join it here. Phone hosting is not enabled yet.");
+        }
+        if ("/api/sync/stop".equals(p)) return syncStatus().toString();
+
+        throw new Exception("Not available in standalone mode: " + p);
+    }
+
+    private JSONObject health() throws Exception {
+        return new JSONObject()
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("ytdlp", "NewPipeExtractor 0.26.5")
+            .put("ffmpeg", "not needed")
+            .put("ffprobe", "not needed")
+            .put("urls", new JSONArray())
+            .put("downloadDir", "")
+            .put("localDir", "")
+            .put("clientId", "")
+            .put("spotifyConnected", false)
+            .put("redirectUri", "");
+    }
+
+    private JSONObject stats() throws Exception {
+        long size = stateFile != null && stateFile.exists() ? stateFile.length() : 0;
+        return new JSONObject()
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("cacheLimit", 0)
+            .put("cacheBytes", 0)
+            .put("cacheCount", 0)
+            .put("coverCount", 0)
+            .put("coverBytes", 0)
+            .put("localCount", 0)
+            .put("localBytes", 0)
+            .put("resolutionCount", 0)
+            .put("dataBytes", size)
+            .put("matchedCount", 0);
+    }
+
+    /* ── state ──────────────────────────────────────────────────────── */
+
+    private String readState() {
+        synchronized (STATE_LOCK) {
+            if (stateFile.exists()) {
+                try {
+                    String s = readFile(stateFile);
+                    if (s != null && s.trim().startsWith("{")) return s;
+                } catch (Exception ignored) {}
+            }
+            String migrated = migrateFromCompanion();
+            String initial = migrated == null ? "{}" : migrated;
+            try { writeFile(stateFile, initial); } catch (Exception ignored) {}
+            return initial;
+        }
+    }
+
+    private void writeState(String body) throws Exception {
+        if (body == null || body.trim().isEmpty()) body = "{}";
+        new JSONObject(body); // validate before replacing the good copy
+        synchronized (STATE_LOCK) {
+            writeFile(stateFile, body);
+        }
+    }
+
+    /**
+     * Users upgrading from the companion APK already have a desktop address.
+     * On first standalone launch, copy that library once so their playlists
+     * are not lost. Failure is silent; the app simply starts empty.
+     */
+    private String migrateFromCompanion() {
+        String server = prefs.getString(KEY_SERVER, "");
+        if (server == null || server.isEmpty()) return null;
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(server.replaceAll("/+$", "") + "/api/state");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(2500);
+            conn.setReadTimeout(3500);
+            conn.setRequestProperty("Accept", "application/json");
+            if (conn.getResponseCode() != 200) return null;
+            String s = readUtf8(conn.getInputStream());
+            if (s != null && s.trim().startsWith("{")) return s;
+        } catch (Exception ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return null;
+    }
+
+    private static void writeFile(File file, String text) throws Exception {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
+        File tmp = new File(file.getPath() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+        }
+        if (!tmp.renameTo(file)) {
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(text.getBytes(StandardCharsets.UTF_8));
+            }
+            tmp.delete();
+        }
+    }
+
+    private static String readFile(File file) throws Exception {
+        try (FileInputStream in = new FileInputStream(file)) {
+            return readUtf8(in);
+        }
+    }
+
+    /* ── YouTube extraction ─────────────────────────────────────────── */
+
+    private static boolean newPipeReady = false;
+
+    private static synchronized void ensureNewPipe() {
+        if (newPipeReady) return;
+        NewPipe.init(new Downloader() {
+            @Override
+            public Response execute(Request request) throws IOException {
+                HttpURLConnection conn = null;
+                try {
+                    conn = (HttpURLConnection) new URL(request.url()).openConnection();
+                    conn.setRequestMethod(request.httpMethod());
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(25000);
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setRequestProperty("User-Agent", UA);
+                    conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+                    for (Map.Entry<String, List<String>> e : request.headers().entrySet()) {
+                        for (String value : e.getValue()) conn.addRequestProperty(e.getKey(), value);
+                    }
+                    byte[] data = request.dataToSend();
+                    if (data != null) {
+                        conn.setDoOutput(true);
+                        try (OutputStream out = conn.getOutputStream()) { out.write(data); }
+                    }
+                    int code = conn.getResponseCode();
+                    InputStream raw = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                    InputStream in = raw;
+                    String enc = conn.getContentEncoding();
+                    if (raw != null && enc != null && enc.toLowerCase(Locale.ROOT).contains("gzip")) {
+                        in = new GZIPInputStream(raw);
+                    }
+                    String responseBody = in == null ? "" : readUtf8(in);
+                    if (in != null) in.close();
+                    Map<String, List<String>> headers = new LinkedHashMap<>();
+                    for (Map.Entry<String, List<String>> e : conn.getHeaderFields().entrySet()) {
+                        if (e.getKey() != null) headers.put(e.getKey(), e.getValue());
+                    }
+                    return new Response(code, conn.getResponseMessage(), headers, responseBody, request.url());
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            }
+        });
+        newPipeReady = true;
+    }
+
+    private String search(String q) throws Exception {
+        q = q == null ? "" : q.trim();
+        if (q.isEmpty()) return "[]";
+        String key = q.toLowerCase(Locale.ROOT);
+        CacheEntry hit = searchCache.get(key);
+        if (hit != null && hit.fresh(10 * 60 * 1000)) return hit.value;
+
+        ensureNewPipe();
+        SearchInfo info = SearchInfo.getInfo(ServiceList.YouTube,
+            ServiceList.YouTube.getSearchQHFactory()
+                .fromQuery(q, Collections.singletonList("music_songs"), null));
+        JSONArray out = new JSONArray();
+        for (InfoItem item : info.getRelatedItems()) {
+            if (!(item instanceof StreamInfoItem)) continue;
+            JSONObject t = trackFrom((StreamInfoItem) item);
+            if (t != null) out.put(t);
+            if (out.length() >= 20) break;
+        }
+        String value = out.toString();
+        searchCache.put(key, new CacheEntry(value));
+        return value;
+    }
+
+    private String match(JSONObject in) throws Exception {
+        String title = in.optString("title", "");
+        String artist = in.optString("artist", "");
+        long duration = in.optLong("duration", 0);
+        String q = (artist + " " + title).trim();
+        if (q.isEmpty()) return new JSONObject().put("ytId", JSONObject.NULL).toString();
+        JSONArray results = new JSONArray(search(q));
+        if (results.length() == 0) return new JSONObject().put("ytId", JSONObject.NULL).toString();
+
+        String want = (title + " " + artist).toLowerCase(Locale.ROOT);
+        String core = title.toLowerCase(Locale.ROOT).replaceFirst("\\s*[\\[(].*$", "");
+        JSONObject best = null;
+        double bestScore = -1e9;
+        for (int i = 0; i < results.length(); i++) {
+            JSONObject t = results.getJSONObject(i);
+            String name = t.optString("title", "").toLowerCase(Locale.ROOT);
+            String uploader = t.optString("artist", "");
+            long d = t.optLong("duration", 0);
+            double score = 0;
+            if (duration > 0 && d > 0) score -= Math.min(Math.abs(d - duration), 90);
+            if (duration > 0 && d > 0 && Math.abs(d - duration) > duration * 0.5) score -= 60;
+            if (uploader.toLowerCase(Locale.ROOT).endsWith(" - topic")) score += 25;
+            if (name.contains("official audio") || name.contains("official video") || name.contains("music video")) score += 10;
+            if (!core.isEmpty() && name.contains(core)) score += 15;
+            Matcher bad = BAD_TITLE.matcher(name);
+            if (bad.find() && !want.contains(bad.group(1).toLowerCase(Locale.ROOT))) score -= 45;
+            if (!artist.isEmpty() && (name.contains(artist.toLowerCase(Locale.ROOT))
+                || uploader.toLowerCase(Locale.ROOT).contains(artist.toLowerCase(Locale.ROOT)))) score += 8;
+            if (score > bestScore) { bestScore = score; best = t; }
+        }
+        if (best == null || bestScore < -70) return new JSONObject().put("ytId", JSONObject.NULL).toString();
+        return new JSONObject().put("ytId", best.optString("ytId")).toString();
+    }
+
+    private String related(String id) throws Exception {
+        id = cleanId(id);
+        ensureNewPipe();
+        StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=" + id);
+        JSONArray out = new JSONArray();
+        for (InfoItem item : info.getRelatedStreams()) {
+            if (!(item instanceof StreamInfoItem)) continue;
+            JSONObject t = trackFrom((StreamInfoItem) item);
+            if (t != null && !id.equals(t.optString("ytId"))) out.put(t);
+            if (out.length() >= 15) break;
+        }
+        return out.toString();
+    }
+
+    private String stream(String id, String q) throws Exception {
+        return new JSONObject().put("url", resolveAudio(id, q)).toString();
+    }
+
+    private String resolveAudio(String id, String quality) throws Exception {
+        id = cleanId(id);
+        String key = id + ":" + (quality == null ? "best" : quality);
+        CacheEntry hit = streamCache.get(key);
+        if (hit != null && hit.fresh(10 * 60 * 1000)) return hit.value;
+
+        ensureNewPipe();
+        StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=" + id);
+        AudioStream pick = null;
+        boolean saver = "saver".equals(quality);
+        for (AudioStream a : info.getAudioStreams()) {
+            if (a == null) continue;
+            String url = a.getContent();
+            if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) continue;
+            if (pick == null) { pick = a; continue; }
+            int br = bitrate(a);
+            int pbr = bitrate(pick);
+            boolean am4a = a.getFormat() == MediaFormat.M4A;
+            boolean pm4a = pick.getFormat() == MediaFormat.M4A;
+            if (saver) {
+                if ((am4a && !pm4a) || (am4a == pm4a && br < pbr)) pick = a;
+            } else {
+                if ((am4a && !pm4a) || (am4a == pm4a && br > pbr)) pick = a;
+            }
+        }
+        if (pick == null) throw new Exception("No audio stream available for this video");
+        String value = pick.getContent();
+        streamCache.put(key, new CacheEntry(value));
+        return value;
+    }
+
+    private static int bitrate(AudioStream a) {
+        int br = a.getAverageBitrate();
+        return br > 0 ? br : a.getBitrate();
+    }
+
+    private static JSONObject trackFrom(StreamInfoItem item) {
+        if (item == null) return null;
+        String id = ytId(item.getUrl());
+        if (id == null) return null;
+        try {
+            String artist = item.getUploaderName() == null ? "" : item.getUploaderName();
+            artist = artist.replaceFirst("(?i)\\s*-\\s*Topic\\s*$", "");
+            if (artist.trim().isEmpty()) artist = "YouTube";
+            return new JSONObject()
+                .put("ytId", id)
+                .put("title", item.getName() == null || item.getName().trim().isEmpty() ? "Untitled" : item.getName())
+                .put("artist", artist)
+                .put("duration", Math.max(0, item.getDuration()))
+                .put("art", "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String cleanId(String raw) throws Exception {
+        String id = ytId(raw);
+        if (id == null) throw new Exception("That YouTube link is not valid");
+        return id;
+    }
+
+    private static String ytId(String raw) {
+        if (raw == null) return null;
+        if (raw.matches("[A-Za-z0-9_-]{11}")) return raw;
+        try {
+            Uri u = Uri.parse(raw);
+            String v = u.getQueryParameter("v");
+            if (v != null && v.matches("[A-Za-z0-9_-]{11}")) return v;
+        } catch (Exception ignored) {}
+        Matcher m = YT_ID.matcher(raw);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /* ── device sync ────────────────────────────────────────────────── */
+
+    private JSONObject syncStatus() throws Exception {
+        String url = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        boolean connected = url != null && !url.isEmpty() && code != null && !code.isEmpty();
+        JSONObject state = new JSONObject(readState());
+        JSONArray playlists = state.optJSONArray("playlists");
+        JSONArray liked = state.optJSONArray("liked");
+        JSONArray history = state.optJSONArray("history");
+        int tracks = 0;
+        if (playlists != null) {
+            for (int i = 0; i < playlists.length(); i++) {
+                JSONArray list = playlists.optJSONObject(i) == null ? null
+                    : playlists.optJSONObject(i).optJSONArray("tracks");
+                if (list != null) tracks += list.length();
+            }
+        }
+        JSONObject counts = new JSONObject()
+            .put("playlists", playlists == null ? 0 : playlists.length())
+            .put("tracks", tracks)
+            .put("liked", liked == null ? 0 : liked.length())
+            .put("history", history == null ? 0 : history.length());
+        return new JSONObject()
+            .put("role", connected ? "guest" : "off")
+            .put("enabled", connected)
+            .put("port", 0)
+            .put("urls", new JSONArray())
+            .put("hostUrl", url == null ? "" : url)
+            .put("peer", prefs.getString(KEY_SYNC_PEER, ""))
+            .put("lastSync", prefs.getLong(KEY_SYNC_LAST, 0))
+            .put("rev", prefs.getLong(KEY_SYNC_REV, 0))
+            .put("code", code == null ? "" : code)
+            .put("counts", counts)
+            .put("error", "")
+            .put("device", Build.MODEL == null ? "Android" : Build.MODEL);
+    }
+
+    private JSONObject syncJoin(JSONObject input) throws Exception {
+        String base = syncBase(input.optString("url", ""));
+        String code = syncCode(input.optString("code", ""));
+        if (code.length() < 6) throw new Exception("Enter the pairing code shown on the computer");
+        JSONObject info = syncFetch(base, code, "GET", "/api/sync/info", null);
+        JSONObject remote = syncFetch(base, code, "GET", "/api/sync/library", null);
+        JSONObject lib = remote.optJSONObject("library");
+        if (lib == null) throw new Exception("The host did not send a library");
+        applyLibrary(lib);
+        prefs.edit()
+            .putString(KEY_SYNC_URL, base)
+            .putString(KEY_SYNC_CODE, code)
+            .putString(KEY_SYNC_PEER, info.optString("name", info.optString("host", "host")))
+            .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
+            .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
+            .apply();
+        return syncStatus();
+    }
+
+    private JSONObject syncPull() throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
+        JSONObject remote = syncFetch(base, code, "GET", "/api/sync/library", null);
+        JSONObject lib = remote.optJSONObject("library");
+        if (lib == null) throw new Exception("The host did not send a library");
+        applyLibrary(lib);
+        prefs.edit()
+            .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
+            .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
+            .apply();
+        return syncStatus();
+    }
+
+    private JSONObject syncPush() throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
+        JSONObject state = new JSONObject(readState());
+        JSONObject lib = new JSONObject()
+            .put("playlists", state.optJSONArray("playlists") == null ? new JSONArray() : state.optJSONArray("playlists"))
+            .put("liked", state.optJSONArray("liked") == null ? new JSONArray() : state.optJSONArray("liked"))
+            .put("history", state.optJSONArray("history") == null ? new JSONArray() : state.optJSONArray("history"));
+        JSONObject payload = new JSONObject().put("library", lib);
+        JSONObject remote = syncFetch(base, code, "PUT", "/api/sync/library", payload.toString());
+        prefs.edit()
+            .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
+            .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
+            .apply();
+        return syncStatus();
+    }
+
+    private JSONObject syncDisconnect() throws Exception {
+        prefs.edit()
+            .remove(KEY_SYNC_URL)
+            .remove(KEY_SYNC_CODE)
+            .remove(KEY_SYNC_PEER)
+            .remove(KEY_SYNC_LAST)
+            .remove(KEY_SYNC_REV)
+            .apply();
+        return syncStatus();
+    }
+
+    private void applyLibrary(JSONObject lib) throws Exception {
+        JSONObject state = new JSONObject(readState());
+        if (lib.has("playlists")) state.put("playlists", lib.optJSONArray("playlists"));
+        if (lib.has("liked")) state.put("liked", lib.optJSONArray("liked"));
+        if (lib.has("history")) state.put("history", lib.optJSONArray("history"));
+        writeState(state.toString());
+    }
+
+    private static String syncBase(String raw) throws Exception {
+        String s = raw == null ? "" : raw.trim();
+        if (s.isEmpty()) throw new Exception("Enter the computer address");
+        if (!s.matches("(?i)^https?://.*")) s = "http://" + s;
+        Uri u = Uri.parse(s);
+        String scheme = u.getScheme() == null ? "http" : u.getScheme().toLowerCase(Locale.ROOT);
+        String host = u.getHost();
+        if (host == null || host.isEmpty()) throw new Exception("That host address is not valid");
+        if (!scheme.equals("http") && !scheme.equals("https")) throw new Exception("Use an http:// or https:// address");
+        int port = u.getPort();
+        if (port < 0) port = 38421;
+        return scheme + "://" + host + ":" + port;
+    }
+
+    private static String syncCode(String raw) {
+        return (raw == null ? "" : raw).toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+    }
+
+    private static JSONObject syncFetch(String base, String code, String method, String route, String body) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(base + route);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod(method);
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("X-Wavelength-Sync", code);
+            if (body != null) {
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json");
+                try (OutputStream out = conn.getOutputStream()) {
+                    out.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            int status = conn.getResponseCode();
+            InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            String text = in == null ? "{}" : readUtf8(in);
+            if (status >= 400) {
+                if (status == 401) throw new Exception("That pairing code is not right");
+                String error = text;
+                try { error = new JSONObject(text).optString("error", text); } catch (Exception ignored) {}
+                throw new Exception(error == null || error.isEmpty() ? "Host answered " + status : error);
+            }
+            return new JSONObject(text);
+        } catch (java.net.SocketTimeoutException e) {
+            throw new Exception("The computer did not answer in time");
+        } catch (java.net.ConnectException e) {
+            throw new Exception("Could not reach the computer");
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    /* ── small utilities ────────────────────────────────────────────── */
+
+    static String readUtf8(InputStream in) throws IOException {
+        if (in == null) return "";
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        return out.toString("UTF-8");
     }
 }

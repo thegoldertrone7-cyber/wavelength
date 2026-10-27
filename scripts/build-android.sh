@@ -28,7 +28,13 @@ buildscript {
   repositories { google(); mavenCentral() }
   dependencies { classpath 'com.android.tools.build:gradle:8.2.2' }
 }
-allprojects { repositories { google(); mavenCentral() } }
+allprojects {
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+  }
+}
 EOF
 
 cat > "$PROJECT/gradle.properties" <<'EOF'
@@ -63,11 +69,15 @@ android {
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
+    coreLibraryDesugaringEnabled true
   }
 }
 
 dependencies {
   implementation 'androidx.appcompat:appcompat:1.6.1'
+  implementation 'androidx.webkit:webkit:1.11.0'
+  implementation 'com.github.teamnewpipe:NewPipeExtractor:0.26.5'
+  coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs_nio:2.1.5'
 }
 EOF
 
@@ -75,6 +85,9 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <application
     android:allowBackup="true"
     android:icon="@mipmap/ic_launcher"
@@ -104,6 +117,10 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
         <data android:scheme="https" android:host="open.spotify.com"/>
       </intent-filter>
     </activity>
+    <service
+      android:name=".PlaybackService"
+      android:exported="false"
+      android:foregroundServiceType="mediaPlayback"/>
   </application>
 </manifest>
 EOF
@@ -129,6 +146,7 @@ EOF
 
 # The native shell lives in scripts/android so it stays readable and diffable.
 cp "$ROOT/scripts/android/MainActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/MainActivity.java"
+cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/wavelength/music/PlaybackService.java"
 
 mkdir -p "$ROOT/dist"
 
