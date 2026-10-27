@@ -30,7 +30,14 @@ yt-dlp and ffmpeg/ffprobe are not bundled with the normal desktop builds; instal
 
     ./start.sh           # macOS / Linux  (start.bat on Windows)
 
-Opens http://127.0.0.1:3000.
+Opens http://127.0.0.1:3000 on this computer. That loopback-only default is
+deliberate: a normal browser session is not exposed to the network. To let a
+phone or another computer connect, start it with:
+
+    HOST=0.0.0.0 ./start.sh
+
+Then use the `Network → http://…:3000` address it prints. The desktop app does
+this automatically and shows the address in **Settings → Devices**.
 
 ## Lossless local files
 
@@ -64,18 +71,32 @@ changes** replaces the host's library with this device's copy.
 
 ## Android
 
-Download the APK from the Releases page. The APK is a WebView wrapper: it does not bundle the Node
-server, so first launch asks for the address of the computer running Wavelength
-(for example `http://192.168.1.10:3000`). Start that server with
-`HOST=0.0.0.0 ./start.sh`, use the same Wi-Fi, and allow the port through the host firewall.
-Tap the small `⋮` button in the top-right corner to change the server address later.
+Download the APK from the [Releases page](https://github.com/thegoldertrone7-cyber/wavelength/releases).
+The APK is a companion client: it does **not** bundle the Node server, `yt-dlp` or
+`ffmpeg`. Playback, downloads and local files come from the computer running Wavelength.
+
+1. Open Wavelength on your computer. The desktop app is the easiest option; browser mode
+   also works with `HOST=0.0.0.0 ./start.sh`.
+2. In **Settings → Devices → Phone & browser access**, copy the address shown
+   (for example `http://192.168.1.10:38421`).
+3. On the phone, open Wavelength and paste that address, or tap **Find my computer** to
+   scan the current Wi-Fi network for Wavelength on ports `38421` (desktop app) and
+   `3000` (browser mode). If more than one server answers, pick yours from the list.
+4. The desktop app usually uses port `38421`. If the connection fails, the app stays on its
+   native setup screen and offers **Retry**, **Back to player** and **Find my computer**;
+   it never leaves Chrome's "Webpage not available" page in front.
+5. Tap the small `⋮` button in the top-right corner to change the server later.
+
+**`127.0.0.1` / `localhost` on Android means the phone itself, not your computer.** The app
+rejects those addresses and explains why. Use the computer's Wi-Fi/Tailscale address instead.
+
+Only do this on a network you trust: anyone who can reach that address can use your
+Wavelength library. The desktop app listens on the local network while it runs; the plain
+`./start.sh` / `node server.js` mode stays loopback-only unless you set `HOST=0.0.0.0`.
 
 While a song plays, Android shows lock-screen and notification controls (play, pause, next,
-previous, seek, artwork). The APK allows cleartext HTTP on your local network; only use it on a
-network you trust. For browser-only use, run `HOST=0.0.0.0 ./start.sh` and open the printed
-network address in Chrome; HTTPS is needed for Chrome's Install app / Share-target features
-(for example `tailscale serve --bg 3000`). Anyone on your network can use the server while
-`HOST=0.0.0.0`, so only do this on a network you trust.
+previous, seek, artwork). For browser-only use, HTTPS is needed for Chrome's Install app /
+Share-target features (for example `tailscale serve --bg 3000`).
 
 ## Your data
 

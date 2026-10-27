@@ -60,6 +60,10 @@ app.whenReady().then(async () => {
   process.env.WAVELENGTH_DATA = path.join(app.getPath('userData'), 'data');
   process.env.NO_OPEN = '1';
   process.env.PORT = process.env.PORT || '38421';
+  // Let phones and other browsers on the same trusted network reach the
+  // desktop app. Wavelength still requires the X-Wavelength header for API
+  // writes, and Settings → Devices shows the exact LAN address to enter.
+  process.env.HOST = process.env.HOST || '0.0.0.0';
   const srv = require('../server.js');
   await srv.ready;
 

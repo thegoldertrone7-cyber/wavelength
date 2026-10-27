@@ -291,10 +291,18 @@ const plTile = (p, i) => tile(cover(p), p.name, `${p.tracks.length} songs`, `dat
 
 const SEARCH_CACHE = new Map(), SEARCH_CACHE_TTL = 5 * 60 * 1000, SEARCH_CACHE_MAX = 30;
 const searchKey = q => q.toLowerCase().replace(/\s+/g, ' ').trim();
-const searchTop = t => `<div class="search-top rise" data-act="playsearch" data-i="0">
+const searchTop = t => {
+  const l = liked(t);
+  return `<div class="search-top rise" data-act="playsearch" data-i="0">
   <div class="st-art">${art(t)}</div>
   <div class="st-copy"><div class="eyebrow">Top result</div><div class="st-title">${esc(t.title)}</div><div class="st-meta">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}${t.duration ? ' · ' + fmt(t.duration) : ''}</div></div>
+  <div class="st-actions">
+    <button class="ib sm${l ? ' on' : ''}" data-act="top-like" title="${l ? 'Remove from Liked Songs' : 'Add to Liked Songs'}" aria-label="${l ? 'Remove from Liked Songs' : 'Add to Liked Songs'}">${l ? I.heartF : I.heart}</button>
+    <button class="ib sm" data-act="top-add" title="Add to playlist" aria-label="Add to playlist">${I.plus}</button>
+    <button class="ib sm" data-act="top-menu" title="More options" aria-label="More options">${I.more}</button>
+  </div>
   <span class="st-play">${I.playS}</span></div>`;
+};
 const searchHTML = r => {
   if (!r.length) return `<div class="empty search-empty"><b>No matches yet.</b><span>Try a song title, an artist, or a mood — for example “lo-fi”.</span></div>`;
   const [top, ...rest] = r;
@@ -604,6 +612,20 @@ function syncHTML() {
       <div class="sync-panel"><div class="eyebrow">Option two</div><h3>Join a host</h3><p class="mut">Paste the host address and pairing code. Joining pulls the host library to this device.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://100.x.x.x:${s.port || ''}" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
     </div>`;
 }
+function accessHTML() {
+  const h = R.health || {};
+  const urls = Array.isArray(h.urls) ? h.urls : [];
+  const enabled = urls.length > 0;
+  return `<div class="access-box">
+    <div class="set-label">Phone &amp; browser access</div>
+    ${enabled
+      ? `<p class="mut">Open one of these addresses on a phone or another computer on the same network. In the Android app, paste it into the setup screen or tap <b>Find my computer</b>.</p>
+        <div class="sync-urls">${urls.map(u => `<button class="sync-url" data-act="sync-copy" data-copy="${esc(u)}"><span>${esc(u)}</span>${I.copy}</button>`).join('')}</div>`
+      : `<p class="mut">This player is only listening on this computer (127.0.0.1), so a phone cannot reach it yet.</p>
+        <p class="mut">In the <b>desktop app</b>, this switches on automatically — reopen Settings → Devices once it has restarted. In browser mode, start the server with <code>HOST=0.0.0.0 ./start.sh</code>.</p>`}
+    <p class="meta sync-note"><b>Only use a network you trust.</b> Anyone who can reach this address can use your library. On Android, <code>127.0.0.1</code> means the phone itself, not your computer. The APK is a companion client and does not bundle the server, yt-dlp or ffmpeg.</p>
+  </div>`;
+}
 async function syncLoad(force = false) {
   if (R.sync && !force) return;
   try { R.sync = await api('/api/sync/status'); }
@@ -631,6 +653,7 @@ function syncPoll() {
 }
 function syncPaint() {
   const box = $('#sync-box'); if (box) box.innerHTML = syncHTML();
+  const access = $('#access-box'); if (access) access.innerHTML = accessHTML();
   const sum = $('#sync-summary'); if (sum) sum.textContent = syncStatusLabel();
 }
 async function refreshLibraryState() {
@@ -699,7 +722,7 @@ function vSet() {
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
       <div class="line"><div><div class="l">Sleep timer</div><div class="s" id="sleep-status">${sleepText()}</div></div><select class="inp" data-set="sleep" aria-label="Sleep timer">${rem ? `<option value="active" selected>${sleepLabel(rem)} left</option>` : ''}<option value="0">Off</option>${sleepOpts}</select></div></div>
-    <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div></div>
+    <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div><div id="access-box">${accessHTML()}</div></div>
     <div class="box rise" style="--i:3" id="set-storage"><h2>Downloads &amp; storage</h2>
       <div class="line"><div class="l">MP3 quality</div><select class="inp" data-set="quality" aria-label="MP3 quality">${[128, 192, 256, 320].map(q => `<option${s.quality === q ? ' selected' : ''}>${q}</option>`).join('')}</select></div>
       <div class="line"><div class="l">Folder</div><div class="inline" style="flex:1;justify-content:flex-end"><input class="inp" id="dl-dir" value="${esc(h.downloadDir || '')}" aria-label="Download folder"><button class="btn" data-act="save-dir">Save</button></div></div>
@@ -2056,6 +2079,21 @@ const acts = {
   'search-recent': el => goSearch(el.dataset.q || ''),
   'search-clear-recent': () => { try { localStorage.removeItem(RECENT_SEARCH_KEY); } catch {} if (curRoute === 'search' && !curArg) draw(); toast('Recent searches cleared'); },
   playsearch: el => { if (R.results.length) play(R.results, +el.dataset.i || 0); },
+  'top-like': el => {
+    const t = R.results[0]; if (!t) return;
+    toggleLike(t);
+    const on = liked(t);
+    el.classList.toggle('on', on);
+    el.innerHTML = on ? I.heartF : I.heart;
+    el.title = on ? 'Remove from Liked Songs' : 'Add to Liked Songs';
+    el.setAttribute('aria-label', el.title);
+  },
+  'top-add': () => { const t = R.results[0]; if (t) addToPl(t); },
+  'top-menu': el => {
+    if (!R.results.length) return;
+    const b = el.getBoundingClientRect();
+    openMenu('search', 0, b.left - 190, b.bottom + 6);
+  },
   'set-clear': () => { const f = $('#set-find'); if (f) { f.value = ''; filterSettings(); f.focus(); } },
   'sync-host': async () => {
     try { R.sync = await api('/api/sync/host', { method: 'POST' }); syncPaint(); toast('Hosting on this device'); }

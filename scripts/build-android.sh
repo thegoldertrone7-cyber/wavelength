@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="$(node -p "require('./package.json').version")"
-VERSION_CODE="${GITHUB_RUN_NUMBER:-1}"
+VERSION_CODE="$(node -p "const v=require('./package.json').version.split('.').map(Number); v[0]*10000+v[1]*100+v[2]")"
 PROJECT="$ROOT/android-app"
 
 rm -rf "$PROJECT"
@@ -56,6 +56,10 @@ android {
     release { minifyEnabled false }
   }
 
+  buildFeatures {
+    buildConfig true
+  }
+
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
@@ -81,6 +85,7 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
     <activity
       android:name=".MainActivity"
       android:exported="true"
+      android:launchMode="singleTop"
       android:configChanges="orientation|screenSize|keyboardHidden"
       android:windowSoftInputMode="adjustResize">
       <intent-filter>
@@ -122,187 +127,55 @@ cat > "$PROJECT/app/src/main/res/values/styles.xml" <<'EOF'
 </resources>
 EOF
 
-cat > "$PROJECT/app/src/main/java/app/wavelength/music/MainActivity.java" <<'EOF'
-package app.wavelength.music;
-
-import android.app.AlertDialog;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.graphics.Color;
-import android.net.Uri;
-import android.os.Bundle;
-import android.text.InputType;
-import android.view.Gravity;
-import android.view.WindowManager;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-
-import androidx.appcompat.app.AppCompatActivity;
-
-/**
- * Thin WebView wrapper. The app does not bundle the Node server: point it at
- * an existing Wavelength server on the LAN (or localhost under Termux).
- */
-public class MainActivity extends AppCompatActivity {
-    private WebView wv;
-
-    private static final String PREFS = "wl";
-    private static final String KEY_URL = "server_url";
-    private static final String DEFAULT_URL = "http://127.0.0.1:3000";
-
-    @Override
-    protected void onCreate(Bundle state) {
-        super.onCreate(state);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        wv = new WebView(this);
-        WebSettings ws = wv.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setMediaPlaybackRequiresUserGesture(false);
-        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
-        wv.setWebChromeClient(new WebChromeClient());
-        wv.addJavascriptInterface(new ServerBridge(), "AndroidBridge");
-
-        FrameLayout root = new FrameLayout(this);
-        root.addView(wv, new FrameLayout.LayoutParams(-1, -1));
-
-        Button serverButton = new Button(this);
-        serverButton.setText("\u22ee");
-        serverButton.setContentDescription("Server address");
-        serverButton.setTextColor(Color.WHITE);
-        serverButton.setTextSize(20);
-        serverButton.setAlpha(0.55f);
-        serverButton.setBackgroundColor(Color.TRANSPARENT);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(44), dp(44));
-        lp.gravity = Gravity.TOP | Gravity.END;
-        lp.topMargin = dp(8);
-        lp.rightMargin = dp(8);
-        root.addView(serverButton, lp);
-        serverButton.setOnClickListener(v -> showServerDialog());
-        setContentView(root);
-
-        String saved = prefs().getString(KEY_URL, "");
-        if (saved.isEmpty()) {
-            showServerDialog();
-        } else {
-            connect(saved);
-        }
-    }
-
-    private SharedPreferences prefs() {
-        return getSharedPreferences(PREFS, 0);
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private void connect(String url) {
-        wv.loadUrl(url);
-        handleIntent(getIntent(), url);
-    }
-
-    private void showServerDialog() {
-        String current = prefs().getString(KEY_URL, DEFAULT_URL);
-
-        EditText input = new EditText(this);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setText(current);
-        input.setSelectAllOnFocus(true);
-        input.setHint("http://192.168.1.10:3000");
-
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(8), dp(20), 0);
-        box.addView(input);
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("Wavelength server")
-            .setMessage("Enter the address of the computer running Wavelength on the same Wi-Fi.")
-            .setView(box)
-            .setPositiveButton("Connect", null)
-            .setNegativeButton("Cancel", null)
-            .create();
-
-        dialog.setOnShowListener(ignored ->
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                String url = input.getText().toString().trim();
-                if (url.isEmpty()) {
-                    input.setError("Server address is required");
-                    return;
-                }
-                if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    url = "http://" + url;
-                }
-                while (url.endsWith("/")) {
-                    url = url.substring(0, url.length() - 1);
-                }
-                prefs().edit().putString(KEY_URL, url).apply();
-                dialog.dismiss();
-                connect(url);
-            })
-        );
-        dialog.show();
-    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        String saved = prefs().getString(KEY_URL, "");
-        if (saved.isEmpty()) {
-            showServerDialog();
-        } else {
-            handleIntent(intent, saved);
-        }
-    }
-
-    private void handleIntent(Intent intent, String base) {
-        if (Intent.ACTION_SEND.equals(intent.getAction())) {
-            String text = intent.getStringExtra(Intent.EXTRA_TEXT);
-            if (text != null) {
-                wv.loadUrl(base + "/#share/" + Uri.encode(text));
-            }
-        } else if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
-            wv.loadUrl(base + "/#share/" + Uri.encode(intent.getData().toString()));
-        }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (wv.canGoBack()) {
-            wv.goBack();
-        } else {
-            super.onBackPressed();
-        }
-    }
-
-    class ServerBridge {
-        @JavascriptInterface
-        public String getServerUrl() {
-            return prefs().getString(KEY_URL, DEFAULT_URL);
-        }
-
-        @JavascriptInterface
-        public void setServerUrl(String url) {
-            if (url != null && !url.trim().isEmpty()) {
-                prefs().edit().putString(KEY_URL, url.trim()).apply();
-            }
-        }
-    }
-}
-EOF
+# The native shell lives in scripts/android so it stays readable and diffable.
+cp "$ROOT/scripts/android/MainActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/MainActivity.java"
 
 mkdir -p "$ROOT/dist"
-gradle -p "$PROJECT" assembleDebug --no-daemon
+
+# Make local builds find the Android SDK the same way Android Studio does.
+if [ -z "${ANDROID_HOME:-}" ] && [ -z "${ANDROID_SDK_ROOT:-}" ]; then
+    for CAND in "$HOME/Library/Android/sdk" "$HOME/Android/Sdk" "/usr/local/share/android-sdk"; do
+        if [ -d "$CAND" ]; then
+            export ANDROID_HOME="$CAND"
+            break
+        fi
+    done
+fi
+
+# Android Gradle Plugin 8.2.x supports Gradle 8.2–8.7, but developers may have
+# Gradle 9+ installed locally. CI pins Gradle 8.7; for a newer local Gradle we
+# generate a throwaway 8.7 wrapper so the same script works in both places.
+GRADLE_CMD="gradle"
+if command -v gradle >/dev/null 2>&1; then
+    GRADLE_MAJOR="$(gradle --version 2>/dev/null | awk '/^Gradle /{split($2,a,"."); print a[1]; exit}')"
+    if [ "${GRADLE_MAJOR:-0}" -ge 9 ]; then
+        echo "Gradle ${GRADLE_MAJOR} is newer than AGP 8.2 supports — using a local Gradle 8.7 wrapper."
+        WRAP_DIR="$(mktemp -d)"
+        : > "$WRAP_DIR/settings.gradle"
+        (cd "$WRAP_DIR" && gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon >/dev/null)
+        cp -R "$WRAP_DIR/gradle" "$PROJECT/gradle"
+        cp "$WRAP_DIR/gradlew" "$PROJECT/gradlew"
+        [ -f "$WRAP_DIR/gradlew.bat" ] && cp "$WRAP_DIR/gradlew.bat" "$PROJECT/gradlew.bat"
+        chmod +x "$PROJECT/gradlew"
+        rm -rf "$WRAP_DIR"
+        GRADLE_CMD="$PROJECT/gradlew"
+
+        # Gradle 8.7 runs on JDK 17–21. If the default JDK is newer (for
+        # example 25), reuse a JDK 21 that Gradle already provisioned.
+        JAVA_MAJOR="$(java -version 2>&1 | awk -F'[\".]' '/version/{print ($2=="1"?$3:$2); exit}')"
+        if [ "${JAVA_MAJOR:-0}" -gt 21 ]; then
+            for CAND in "$HOME/.gradle/jdks"/*/jdk-21*/Contents/Home /Library/Java/JavaVirtualMachines/*21*/Contents/Home; do
+                if [ -x "$CAND/bin/java" ]; then
+                    export JAVA_HOME="$CAND"
+                    echo "Using JDK 21 from $JAVA_HOME"
+                    break
+                fi
+            done
+        fi
+    fi
+fi
+
+"$GRADLE_CMD" -p "$PROJECT" assembleDebug --no-daemon
 
 APK="$(find "$PROJECT/app/build/outputs/apk/debug" -name '*.apk' -print -quit)"
 if [ -z "$APK" ]; then

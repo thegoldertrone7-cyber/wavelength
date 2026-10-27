@@ -30,6 +30,16 @@ try {
 const PORT   = +process.env.PORT  || 3000;
 const HOST   = process.env.HOST   || '127.0.0.1';
 const LOOPBACK = ['127.0.0.1','localhost','::1'].includes(HOST);
+/* Addresses a phone or another browser can use to reach this player server.
+   Empty in loopback-only mode, which stays the default for plain `node server.js`. */
+const lanUrls = () => {
+  if (LOOPBACK) return [];
+  const urls = [];
+  for (const nets of Object.values(os.networkInterfaces())) for (const n of nets || []) {
+    if (n.family === 'IPv4' && !n.internal && !/^169\.254\./.test(n.address)) urls.push(`http://${n.address}:${PORT}`);
+  }
+  return [...new Set(urls)];
+};
 const SYNC_PORT = +process.env.SYNC_PORT || (PORT < 65535 ? PORT + 1 : PORT - 1);
 const YTDLP   = process.env.YTDLP_PATH   || 'yt-dlp';
 const FFMPEG  = process.env.FFMPEG_PATH  || 'ffmpeg';
@@ -1376,7 +1386,7 @@ async function health(){
     const[y,f,p]=await Promise.all([bin(YTDLP,['--version']),bin(FFMPEG,['-version']),bin(FFPROBE,['-version'])]);
     hc={ytdlp:y,ffmpeg:f?f.replace(/^ffmpeg version\s+(\S+).*/,'$1'):null,ffprobe:p?p.replace(/^ffprobe version\s+(\S+).*/,'$1'):null};hAt=Date.now();
   }
-  return{...hc,version:VERSION,clientId:clientId(),redirectUri:REDIRECT,spotifyConnected:!!readJSON('spotify.json',null),downloadDir:config.downloadDir,localDir:LOCAL_DIR,port:PORT};
+  return{...hc,version:VERSION,host:HOST,loopback:LOOPBACK,urls:lanUrls(),syncPort:SYNC_PORT,clientId:clientId(),redirectUri:REDIRECT,spotifyConnected:!!readJSON('spotify.json',null),downloadDir:config.downloadDir,localDir:LOCAL_DIR,port:PORT};
 }
 
 /* ── device sync ── */
