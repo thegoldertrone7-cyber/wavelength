@@ -3,6 +3,7 @@
 Free, ad-free music app. Paste a Spotify link, it finds the songs on YouTube, plays them
 ad-free with endless playback, downloads MP3s, plays your own lossless files at native quality,
 custom playlist images, multiple interface styles, Catppuccin palettes and custom accent colours.
+The visual language, motion rules and feature map are documented in [DESIGN.md](DESIGN.md).
 
 ## Desktop app (macOS / Windows / Linux)
 
@@ -18,8 +19,9 @@ Build an installable app (run it on the OS you are building for):
     npm run dist:linux   # -> dist/Wavelength-*.AppImage    (run on Linux)
     bash scripts/build-flatpak.sh   # -> dist/Wavelength-*-x86_64.flatpak (Linux)
 
-The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`;
-tagged releases attach the DMG, EXE, AppImage, Flatpak and Android APK to the GitHub release.
+The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`.
+Each release page lists the installation files included; Android-only patch releases may contain
+just the APK and its checksum.
 
 The app is unsigned. First launch on macOS: right-click the app -> Open, or run
 `xattr -cr /Applications/Wavelength.app`.
@@ -70,7 +72,8 @@ Playlists, liked songs and history stay in sync; themes, downloads and local fil
 The sync listener uses the next port after the player (`38422` for the desktop app). It is only active
 while Wavelength is open. Use Tailscale on both devices, or join over the same Wi-Fi and allow that port
 through the host firewall. **Pull now** replaces this device's library with the host's copy; **Send
-changes** replaces the host's library with this device's copy.
+changes** replaces the host's library with this device's copy. Every paired guest can send changes;
+the newest push wins, and there is no automatic merge.
 
 ## Android
 

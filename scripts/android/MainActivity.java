@@ -6,12 +6,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -22,6 +24,11 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import org.json.JSONArray;
@@ -95,6 +102,8 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences prefs;
     private File stateFile;
     private boolean pageReady = false;
+    private int safeTopCss = 0;
+    private int safeBottomCss = 0;
     private String pendingShare = null;
     private static MainActivity current = null;
 
@@ -113,10 +122,57 @@ public class MainActivity extends AppCompatActivity {
         stateFile = new File(getFilesDir(), "state.json");
         ensureNewPipe();
         requestNotificationPermission();
+        setupSystemBars();
         buildWebView();
         setContentView(wv, new ViewGroup.LayoutParams(-1, -1));
+        setupInsets();
         pendingShare = shareTarget(getIntent());
         wv.loadUrl(START_URL);
+    }
+
+    /**
+     * Android 15 draws apps edge-to-edge whether they ask for it or not, but
+     * older versions still show an opaque strip behind the system buttons.
+     * Transparent bars plus the CSS safe-area variables keep the app's own
+     * background under the status and navigation controls on every version.
+     */
+    private void setupSystemBars() {
+        Window window = getWindow();
+        WindowCompat.setDecorFitsSystemWindows(window, false);
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.setNavigationBarDividerColor(Color.TRANSPARENT);
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.setStatusBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
+        }
+        WindowInsetsControllerCompat controller =
+            WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(false);
+        controller.setAppearanceLightNavigationBars(false);
+    }
+
+    private void setupInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(wv, (view, insets) -> {
+            Insets bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            float density = getResources().getDisplayMetrics().density;
+            safeTopCss = Math.round(bars.top / density);
+            safeBottomCss = Math.round(bars.bottom / density);
+            applySafeInsets();
+            return insets;
+        });
+        ViewCompat.requestApplyInsets(wv);
+    }
+
+    private void applySafeInsets() {
+        if (!pageReady || wv == null) return;
+        String js = "(function(){var r=document.documentElement;if(!r)return;"
+            + "r.style.setProperty('--safe-top','" + safeTopCss + "px');"
+            + "r.style.setProperty('--safe-bottom','" + safeBottomCss + "px');})()";
+        wv.evaluateJavascript(js, null);
     }
 
     private void requestNotificationPermission() {
@@ -159,6 +215,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 pageReady = true;
+                applySafeInsets();
                 applyPendingShare();
             }
 
@@ -303,6 +360,17 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void toast(String text) {
             main.post(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public void setLightSystemBars(boolean light) {
+            main.post(() -> {
+                Window window = getWindow();
+                WindowInsetsControllerCompat controller =
+                    WindowCompat.getInsetsController(window, window.getDecorView());
+                controller.setAppearanceLightStatusBars(light);
+                controller.setAppearanceLightNavigationBars(light);
+            });
         }
 
         @JavascriptInterface

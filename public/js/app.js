@@ -25,6 +25,13 @@ const localBadge = t => t && t.localId
   : '';
 
 const NATIVE = typeof window.AndroidBridge !== 'undefined';
+function syncSystemBars() {
+  if (!NATIVE) return;
+  const theme = S.settings.theme;
+  const light = theme === 'light' || theme === 'latte'
+    || (theme === 'auto' && typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: light)').matches);
+  try { window.AndroidBridge.setLightSystemBars(!!light); } catch {}
+}
 let nativeSeq = 0;
 const nativeCalls = new Map();
 
@@ -245,6 +252,7 @@ function applyTheme() {
   VC.dim = getComputedStyle(root).getPropertyValue('--dot').trim() || VC.dim;
   const meta = $('meta[name=theme-color]');
   if (meta) meta.content = getComputedStyle(root).getPropertyValue('--bg').trim();
+  syncSystemBars();
   if (!autoWatcher && autoLight) {
     autoWatcher = true;
     const onScheme = () => { if (S.settings.theme === 'auto') applyTheme(); };
@@ -654,7 +662,7 @@ function syncHTML() {
       <div class="sync-pair"><div><div class="set-label">Pairing code</div><code class="sync-code">${esc(s.code)}</code></div><button class="btn sm" data-act="sync-copy" data-copy="${esc(s.code)}">${I.copy}Copy</button></div>
       <div class="set-label">Host address</div>
       <div class="sync-urls">${urls.length ? urls.map(u => `<button class="sync-url" data-act="sync-copy" data-copy="${esc(u)}"><span>${esc(u)}</span>${I.copy}</button>`).join('') : '<div class="sync-url empty-url">No network address found. Connect Wi-Fi or Tailscale, then try again.</div>'}</div>
-      <p class="meta sync-note">Pair a device with the address and code above. The host stays authoritative for its current library; send changes from a guest when you want to update it.</p>
+      <p class="meta sync-note">Pair any device with the address and code above. Every paired guest can send its library here; the newest send wins, so treat the host as the shared copy.</p>
       ${countLine}`;
   }
   if (s.role === 'guest') {
