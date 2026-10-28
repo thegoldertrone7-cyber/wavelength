@@ -12,6 +12,8 @@ rm -rf "$PROJECT"
 mkdir -p "$PROJECT/app/src/main/assets"
 mkdir -p "$PROJECT/app/src/main/java/app/wavelength/music"
 mkdir -p "$PROJECT/app/src/main/res/values"
+mkdir -p "$PROJECT/app/src/main/res/layout"
+mkdir -p "$PROJECT/app/src/main/res/drawable"
 mkdir -p "$PROJECT/app/src/main/res/mipmap-xxxhdpi"
 mkdir -p "$PROJECT/app/src/main/res/xml"
 
@@ -121,8 +123,140 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
       android:name=".PlaybackService"
       android:exported="false"
       android:foregroundServiceType="mediaPlayback"/>
+    <receiver
+      android:name=".WavelengthWidget"
+      android:exported="false"
+      android:label="Wavelength">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/wavelength_widget_info"/>
+    </receiver>
   </application>
 </manifest>
+EOF
+
+cat > "$PROJECT/app/src/main/res/xml/wavelength_widget_info.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:minWidth="250dp"
+  android:minHeight="90dp"
+  android:targetCellWidth="4"
+  android:targetCellHeight="2"
+  android:updatePeriodMillis="0"
+  android:initialLayout="@layout/wavelength_widget"
+  android:resizeMode="horizontal|vertical"
+  android:widgetCategory="home_screen"
+  android:description="@string/widget_description"/>
+EOF
+
+cat > "$PROJECT/app/src/main/res/layout/wavelength_widget.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:orientation="vertical"
+  android:gravity="center_vertical"
+  android:background="@drawable/widget_bg"
+  android:padding="14dp">
+
+  <TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="WAVELENGTH"
+    android:textColor="#99FFFFFF"
+    android:textSize="9sp"
+    android:letterSpacing="0.2"
+    android:fontFamily="sans-serif-medium"/>
+
+  <TextView
+    android:id="@+id/widget_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:text="Wavelength"
+    android:textColor="#FFFFFFFF"
+    android:textSize="16sp"
+    android:fontFamily="sans-serif-medium"
+    android:maxLines="1"
+    android:ellipsize="end"/>
+
+  <TextView
+    android:id="@+id/widget_artist"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="1dp"
+    android:text="Tap to open"
+    android:textColor="#B3FFFFFF"
+    android:textSize="12sp"
+    android:maxLines="1"
+    android:ellipsize="end"/>
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical">
+
+    <ImageButton
+      android:id="@+id/widget_prev"
+      android:layout_width="44dp"
+      android:layout_height="44dp"
+      android:background="@android:color/transparent"
+      android:contentDescription="Previous"
+      android:src="@android:drawable/ic_media_previous"
+      android:tint="#FFFFFFFF"/>
+
+    <ImageButton
+      android:id="@+id/widget_play"
+      android:layout_width="48dp"
+      android:layout_height="48dp"
+      android:layout_marginLeft="6dp"
+      android:layout_marginRight="6dp"
+      android:background="@drawable/widget_play_bg"
+      android:contentDescription="Play"
+      android:src="@android:drawable/ic_media_play"
+      android:tint="#FFFFFFFF"/>
+
+    <ImageButton
+      android:id="@+id/widget_next"
+      android:layout_width="44dp"
+      android:layout_height="44dp"
+      android:background="@android:color/transparent"
+      android:contentDescription="Next"
+      android:src="@android:drawable/ic_media_next"
+      android:tint="#FFFFFFFF"/>
+  </LinearLayout>
+</LinearLayout>
+EOF
+
+cat > "$PROJECT/app/src/main/res/drawable/widget_bg.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+  android:shape="rectangle">
+  <corners android:radius="24dp"/>
+  <solid android:color="#E6101014"/>
+  <stroke android:width="1dp" android:color="#33FFFFFF"/>
+</shape>
+EOF
+
+cat > "$PROJECT/app/src/main/res/drawable/widget_play_bg.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+  android:shape="oval">
+  <solid android:color="#26FFFFFF"/>
+</shape>
+EOF
+
+cat > "$PROJECT/app/src/main/res/values/strings.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="widget_description">Current track and playback controls</string>
+</resources>
 EOF
 
 cat > "$PROJECT/app/src/main/res/xml/network_security.xml" <<'EOF'
@@ -147,6 +281,7 @@ EOF
 # The native shell lives in scripts/android so it stays readable and diffable.
 cp "$ROOT/scripts/android/MainActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/MainActivity.java"
 cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/wavelength/music/PlaybackService.java"
+cp "$ROOT/scripts/android/WavelengthWidget.java" "$PROJECT/app/src/main/java/app/wavelength/music/WavelengthWidget.java"
 
 mkdir -p "$ROOT/dist"
 

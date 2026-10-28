@@ -133,6 +133,10 @@ const I = {
   copy: P('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1"/>'),
   search2: P('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+  chart: P('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+  mix: P('<path d="M4 7h4l8 10h4"/><path d="m17 14 3 3-3 3"/><path d="M4 17h4l2-2.5"/><path d="m17 4 3 3-3 3"/><path d="M13 9.5 15 7h1"/>'),
+  clock: P('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>'),
+  block: P('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
 };
 const GENRES = ['Pop', 'Hip-Hop', 'Rock', 'Electronic', 'Lo-Fi', 'Jazz', 'R&B', 'Indie', 'Metal', 'K-Pop', 'Latin', 'Afrobeats', 'Classical', 'Country'];
 const RECENT_SEARCH_KEY = 'wl-recent-searches';
@@ -152,11 +156,251 @@ function rememberSearch(q) {
 }
 
 /* ═════════ state ═════════ */
-const DEF = { playlists: [], liked: [], history: [], settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8 } };
+const DEF = { playlists: [], liked: [], history: [], listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list' } };
 let S = structuredClone(DEF);
-const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null };
+const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null, playCtx: '', viewList: null, recapYear: new Date().getFullYear(), recapFrom: '', recapTo: '', infoCache: {}, credits: null, creditDone: '', listenTick: 0, normGain: 1, normReady: 0, remix: null };
 let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api('/api/state', { method: 'PUT', json: S }).catch(() => {}), 400); };
 let toastT; const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800); };
+
+/* ═════════ device identity & listening stats ═════════ */
+/* Listening time is counted on the device that actually played the song, then
+   merged by device id during sync. That avoids double-counting when the same
+   track exists in several libraries. */
+const DEVICE_KEY = 'wl-device-id';
+function deviceId() {
+  let id = '';
+  try { id = localStorage.getItem(DEVICE_KEY) || ''; } catch {}
+  if (!id) {
+    id = 'dev-' + rid() + rid();
+    try { localStorage.setItem(DEVICE_KEY, id); } catch {}
+  }
+  return id;
+}
+function deviceName() {
+  if (NATIVE) return 'Android';
+  const p = navigator.userAgentData && navigator.userAgentData.platform;
+  if (p) return p;
+  if (/Mac/i.test(navigator.platform || '')) return 'Mac';
+  if (/Win/i.test(navigator.platform || '')) return 'Windows';
+  if (/Linux/i.test(navigator.platform || '')) return 'Linux';
+  return 'Browser';
+}
+const yearStr = (d = new Date()) => String(d.getFullYear());
+const dayStr = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function listenDevice() {
+  if (!S.listening || typeof S.listening !== 'object') S.listening = { v: 1, devices: {} };
+  if (!S.listening.devices || typeof S.listening.devices !== 'object') S.listening.devices = {};
+  const id = deviceId();
+  let d = S.listening.devices[id];
+  if (!d || typeof d !== 'object') d = S.listening.devices[id] = { name: deviceName(), updatedAt: Date.now(), days: {}, years: {} };
+  if (!d.days || typeof d.days !== 'object') d.days = {};
+  if (!d.years || typeof d.years !== 'object') d.years = {};
+  d.name = deviceName();
+  return d;
+}
+function yearBucket(d, y) {
+  if (!d.years[y]) d.years[y] = { seconds: 0, tracks: {}, playlists: {}, artists: {} };
+  const b = d.years[y];
+  for (const k of ['tracks', 'playlists', 'artists']) if (!b[k] || typeof b[k] !== 'object') b[k] = {};
+  if (!+b.seconds) b.seconds = 0;
+  return b;
+}
+/* Daily detail makes arbitrary date ranges possible. It is stored compactly as
+   [seconds, plays] pairs so a busy year does not balloon the library file. */
+function dayBucket(d, day) {
+  if (!d.daily || typeof d.daily !== 'object') d.daily = {};
+  let b = d.daily[day];
+  if (!b || typeof b !== 'object') b = d.daily[day] = {};
+  for (const k of ['t', 'a', 'p']) if (!b[k] || typeof b[k] !== 'object') b[k] = {};
+  return b;
+}
+function bumpStat(map, key, sec, plays) {
+  const a = Array.isArray(map[key]) ? map[key] : (map[key] = [0, 0]);
+  a[0] = (+a[0] || 0) + (+sec || 0);
+  a[1] = (+a[1] || 0) + (+plays || 0);
+  return a;
+}
+function bumpDay(d, day, pool, key, sec, plays) {
+  const b = dayBucket(d, day);
+  bumpStat(b[pool], key, sec, plays);
+}
+function countListen(sec = 1) {
+  if (!R.cur || !sec) return;
+  const d = listenDevice(), now = new Date(), day = dayStr(now), y = yearStr(now), b = yearBucket(d, y);
+  d.updatedAt = Date.now();
+  d.days[day] = (+d.days[day] || 0) + sec;
+  b.seconds += sec;
+  const k = uid(R.cur);
+  const t = b.tracks[k] || (b.tracks[k] = { title: R.cur.title || 'Untitled', artist: R.cur.artist || '', art: R.cur.art || '', seconds: 0, plays: 0 });
+  t.seconds = (+t.seconds || 0) + sec;
+  t.title = R.cur.title || t.title; t.artist = R.cur.artist || t.artist; t.art = R.cur.art || t.art;
+  bumpDay(d, day, 't', k, sec, 0);
+  const an = (R.cur.artist || 'Unknown artist').trim() || 'Unknown artist';
+  const a = b.artists[an] || (b.artists[an] = { seconds: 0, plays: 0 });
+  a.seconds = (+a.seconds || 0) + sec;
+  bumpDay(d, day, 'a', an, sec, 0);
+  if (R.playCtx) {
+    const p = b.playlists[R.playCtx] || (b.playlists[R.playCtx] = { seconds: 0, plays: 0 });
+    p.seconds = (+p.seconds || 0) + sec;
+    bumpDay(d, day, 'p', R.playCtx, sec, 0);
+  }
+}
+function countPlay() {
+  if (!R.cur) return;
+  const d = listenDevice(), now = new Date(), day = dayStr(now), b = yearBucket(d, yearStr(now));
+  d.updatedAt = Date.now();
+  const k = uid(R.cur);
+  const t = b.tracks[k] || (b.tracks[k] = { title: R.cur.title || 'Untitled', artist: R.cur.artist || '', art: R.cur.art || '', seconds: 0, plays: 0 });
+  t.plays = (+t.plays || 0) + 1;
+  t.title = R.cur.title || t.title; t.artist = R.cur.artist || t.artist; t.art = R.cur.art || t.art;
+  bumpDay(d, day, 't', k, 0, 1);
+  const an = (R.cur.artist || 'Unknown artist').trim() || 'Unknown artist';
+  const a = b.artists[an] || (b.artists[an] = { seconds: 0, plays: 0 });
+  a.plays = (+a.plays || 0) + 1;
+  bumpDay(d, day, 'a', an, 0, 1);
+  if (R.playCtx) {
+    const p = b.playlists[R.playCtx] || (b.playlists[R.playCtx] = { seconds: 0, plays: 0 });
+    p.plays = (+p.plays || 0) + 1;
+    bumpDay(d, day, 'p', R.playCtx, 0, 1);
+  }
+}
+function startListening() {
+  clearInterval(R.listenTick);
+  R.listenTick = setInterval(() => {
+    if (!R.playing || audio.paused || document.hidden) return;
+    countListen(1);
+    R.listenDirty = true;
+    if (!R.listenSaved || Date.now() - R.listenSaved > 12000) { R.listenSaved = Date.now(); save(); }
+  }, 1000);
+}
+function flushListening() {
+  clearInterval(R.listenTick); R.listenTick = 0;
+  if (R.listenDirty) { R.listenDirty = false; api('/api/state', { method: 'PUT', json: S }).catch(() => {}); }
+}
+const ctxName = c => {
+  if (!c) return '';
+  if (c === 'liked') return 'Liked Songs';
+  if (c === 'history') return 'History';
+  if (c === 'local') return 'Local files';
+  if (c === 'search') return 'Search';
+  if (c === 'queue') return 'Queue';
+  const p = S.playlists.find(x => x.id === c);
+  return p ? p.name : '';
+};
+/* A recap can cover a whole year or any start/end date. Year buckets are
+   accurate for complete years (including libraries recorded before daily stats
+   existed); daily detail fills in the edges of a custom range. */
+function parseRecapRange(arg) {
+  const raw = String(arg || '');
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})~(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    let from = `${m[1]}-${m[2]}-${m[3]}`, to = `${m[4]}-${m[5]}-${m[6]}`;
+    if (from > to) [from, to] = [to, from];
+    return { from, to };
+  }
+  const y = /^\d{4}$/.test(raw) ? raw : String(new Date().getFullYear());
+  return { from: `${y}-01-01`, to: `${y}-12-31` };
+}
+function wholeYearsIn(from, to) {
+  const out = [];
+  const first = +from.slice(0, 4), last = +to.slice(0, 4);
+  for (let y = first; y <= last; y++) {
+    const year = String(y);
+    if (from <= `${year}-01-01` && to >= `${year}-12-31`) out.push(year);
+  }
+  return out;
+}
+const dayLabel = key => {
+  const [y, m, d] = String(key).split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+function recapData(from, to) {
+  const out = { from, to, seconds: 0, plays: 0, tracks: {}, artists: {}, playlists: {}, days: {}, devices: 0, detailed: false };
+  const devices = Object.values((S.listening && S.listening.devices) || {});
+  const whole = wholeYearsIn(from, to);
+  const wholeSet = new Set(whole);
+  out.partial = !(whole.length && from === `${whole[0]}-01-01` && to === `${whole[whole.length - 1]}-12-31`);
+
+  // Song metadata lives in year buckets and the library. Build it first so a
+  // daily [seconds, plays] pair can still show a title and cover.
+  const meta = new Map();
+  const addMeta = t => { const k = t && uid(t); if (k && !meta.has(k)) meta.set(k, t); };
+  S.liked.forEach(addMeta);
+  S.playlists.forEach(p => (p.tracks || []).forEach(addMeta));
+  for (const d of devices) {
+    if (!d || typeof d !== 'object') continue;
+    for (const b of Object.values(d.years || {})) {
+      if (!b || typeof b !== 'object') continue;
+      for (const [k, t] of Object.entries(b.tracks || {})) if (!meta.has(k)) meta.set(k, t);
+    }
+  }
+
+  const addTrack = (key, t, sec, plays) => {
+    const x = out.tracks[key] || (out.tracks[key] = {
+      title: (t && t.title) || 'Untitled', artist: (t && t.artist) || '', art: (t && t.art) || '', seconds: 0, plays: 0
+    });
+    x.seconds += +sec || 0; x.plays += +plays || 0;
+    if (t && t.art) x.art = t.art;
+  };
+  const addNamed = (kind, name, sec, plays) => {
+    const x = out[kind][name] || (out[kind][name] = { seconds: 0, plays: 0 });
+    x.seconds += +sec || 0; x.plays += +plays || 0;
+  };
+
+  for (const d of devices) {
+    if (!d || typeof d !== 'object') continue;
+    let used = false;
+    for (const [day, sec] of Object.entries(d.days || {})) {
+      if (day >= from && day <= to) {
+        out.days[day] = (+out.days[day] || 0) + (+sec || 0);
+        out.seconds += +sec || 0;
+        used = true;
+      }
+    }
+    for (const [y, b] of Object.entries(d.years || {})) {
+      if (!b || typeof b !== 'object' || !wholeSet.has(y)) continue;
+      used = true;
+      for (const [k, t] of Object.entries(b.tracks || {})) addTrack(k, t, t.seconds, t.plays);
+      for (const [name, a] of Object.entries(b.artists || {})) addNamed('artists', name, a.seconds, a.plays);
+      for (const [name, p] of Object.entries(b.playlists || {})) addNamed('playlists', name, p.seconds, p.plays);
+    }
+    for (const [day, b] of Object.entries(d.daily || {})) {
+      if (day < from || day > to || wholeSet.has(day.slice(0, 4)) || !b || typeof b !== 'object') continue;
+      for (const [k, arr] of Object.entries(b.t || {})) {
+        if (!Array.isArray(arr)) continue;
+        addTrack(k, meta.get(k) || {}, arr[0], arr[1]);
+        out.detailed = true;
+      }
+      for (const [name, arr] of Object.entries(b.a || {})) if (Array.isArray(arr)) { addNamed('artists', name, arr[0], arr[1]); out.detailed = true; }
+      for (const [name, arr] of Object.entries(b.p || {})) if (Array.isArray(arr)) { addNamed('playlists', name, arr[0], arr[1]); out.detailed = true; }
+    }
+    if (used) out.devices++;
+  }
+  out.plays = Object.values(out.tracks).reduce((n, t) => n + (+t.plays || 0), 0);
+  out.topTracks = Object.entries(out.tracks).map(([k, t]) => ({ key: k, ...t })).sort((a, b) => b.seconds - a.seconds).slice(0, 10);
+  out.topArtists = Object.entries(out.artists).map(([name, a]) => ({ name, ...a })).sort((a, b) => b.seconds - a.seconds).slice(0, 6);
+  out.topPlaylists = Object.entries(out.playlists).map(([name, p]) => ({ name, ...p })).sort((a, b) => b.seconds - a.seconds).slice(0, 6);
+  return out;
+}
+const recapYears = () => {
+  const set = new Set([new Date().getFullYear(), new Date().getFullYear() - 1]);
+  for (const d of Object.values((S.listening && S.listening.devices) || {})) for (const y of Object.keys((d && d.years) || {})) set.add(+y);
+  return [...set].filter(y => Number.isFinite(y)).sort((a, b) => b - a);
+};
+
+/* ═════════ No AI + artist blocking (best-effort text matching) ═════════ */
+/* There is no reliable way to detect AI music from YouTube metadata. This is
+   deliberately a conservative keyword filter, not a classifier. */
+const AI_RE = /(?:\bA\.?I\.?\b|artificial intelligence|\bai[- ]?(?:generated|powered|cover|version|vocals?|music|song|artist|remix)\b|\b(?:generated|made) (?:by|with) ai\b|\bsuno\b|\budio\b|\brvc\b|deepfake|voice ?clone|neural (?:network|vocals?)|\bllm\b|chatgpt)/i;
+const looksAI = t => !!t && AI_RE.test([t.title, t.artist, t.album].filter(Boolean).join(' '));
+const normArtist = s => String(s || '').toLowerCase().replace(/\s*-\s*topic$/, '').replace(/\s+/g, ' ').trim();
+function isBlocked(t) {
+  const a = normArtist(t && t.artist);
+  if (!a) return false;
+  return (S.settings.blockedArtists || []).some(b => { const n = normArtist(b); return n && (a === n || a.startsWith(n + ' ') || a.startsWith(n + ',') || a.includes(' feat ' + n)); });
+}
+const allowed = t => !(S.settings.noAi && looksAI(t)) && !isBlocked(t);
+const filterAllowed = list => list.filter(allowed);
 
 /* ═════════ theming ═════════ */
 /* Official Catppuccin palettes. The four flavours are complete themes;
@@ -322,9 +566,38 @@ function rows(list, ctx, offset = 0) {
     <button class="ib" data-act="menu" title="More">${I.more}</button></div>`).join('');
 }
 function ctxList(c) {
-  if (c === 'liked') return S.liked; if (c === 'search') return R.results; if (c === 'history') return S.history; if (c === 'queue') return R.queue;
+  const clean = l => (S.settings.noAi || (S.settings.blockedArtists || []).length) ? l.filter(allowed) : l;
+  if (c === 'liked') return sortTracks(clean(S.liked));
+  if (c === 'search') return R.results;
+  if (c === 'history') return clean(S.history);
+  if (c === 'queue') return R.queue;
   if (c === 'local') return R.local;
-  return (S.playlists.find(p => p.id === c) || {}).tracks || [];
+  return sortTracks(clean((S.playlists.find(p => p.id === c) || {}).tracks || []));
+}
+const SORT_KEYS = [['added', 'Recently added'], ['title', 'A–Z'], ['artist', 'Artist'], ['duration', 'Duration'], ['album', 'Album']];
+function sortTracks(list, key = S.settings.plSort || 'added') {
+  const arr = list.slice();
+  const byText = (a, b) => String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base', numeric: true });
+  const cmp = {
+    added: (a, b) => (+b.addedAt || 0) - (+a.addedAt || 0),
+    title: (a, b) => byText(a.title, b.title),
+    artist: (a, b) => byText(a.artist, b.artist) || byText(a.title, b.title),
+    album: (a, b) => byText(a.album, b.album) || byText(a.title, b.title),
+    duration: (a, b) => (+a.duration || 0) - (+b.duration || 0),
+  }[key];
+  return cmp ? arr.sort(cmp) : arr;
+}
+function removeFromCtx(c, t) {
+  const same = x => uid(x) === uid(t);
+  if (c === 'liked') S.liked = S.liked.filter(x => !same(x));
+  else if (c === 'history') S.history = S.history.filter(x => !same(x));
+  else if (c === 'queue') { const i = R.queue.findIndex(same); if (i >= 0) { R.queue.splice(i, 1); if (i <= R.idx) R.idx--; } }
+  else if (c === 'local') return deleteLocalTrack(t);
+  else {
+    const pl = S.playlists.find(p => p.id === c);
+    if (pl) pl.tracks = pl.tracks.filter(x => !same(x));
+  }
+  save(); drawSide(); hl(); if (curRoute !== 'search') draw(); saveSession(true);
 }
 
 /* ═════════ views ═════════ */
@@ -381,16 +654,16 @@ function updateSearchClear() {
 function vSearch(q) {
   if (!q) return searchLanding();
   const hit = SEARCH_CACHE.get(searchKey(q));
-  if (hit) R.results = hit.items;
+  if (hit) R.results = filterAllowed(hit.items);
   doSearch(q);
-  return `<div class="search-head rise"><div><div class="eyebrow">Search results</div><h1 class="search-title">${esc(q)}</h1></div><div class="search-head-side"><span class="meta" id="search-count">${hit ? plural(hit.items.length, 'song') : 'Searching…'}</span><button class="btn sm" data-act="search-clear">Clear</button></div></div><div id="sr">${hit ? searchHTML(hit.items) : searchSkeleton()}</div>`;
+  return `<div class="search-head rise"><div><div class="eyebrow">Search results</div><h1 class="search-title">${esc(q)}</h1></div><div class="search-head-side"><span class="meta" id="search-count">${hit ? plural(R.results.length, 'song') : 'Searching…'}</span><button class="btn sm" data-act="search-clear">Clear</button></div></div><div id="sr">${hit ? searchHTML(R.results) : searchSkeleton()}</div>`;
 }
 function renderSearch(r) {
-  R.results = r;
+  R.results = filterAllowed(r);
   const root = $('#sr');
   if (!root) return;
-  const count = $('#search-count'); if (count) count.textContent = plural(r.length, 'song');
-  root.innerHTML = searchHTML(r);
+  const count = $('#search-count'); if (count) count.textContent = plural(R.results.length, 'song');
+  root.innerHTML = searchHTML(R.results);
   observeRows();
 }
 function doSearch(q) {
@@ -402,7 +675,7 @@ function doSearch(q) {
     if (r[0]) R.warmT = setTimeout(() => { if (my === R.sTok) warmTrack(r[0]); }, 300);
   };
   // Revalidate in the background, but show known results immediately.
-  api('/api/search?q=' + encodeURIComponent(q)).then(r => {
+  api('/api/search?q=' + encodeURIComponent(q) + (S.settings.noAi ? '&noAi=1' : '')).then(r => {
     if (my !== R.sTok || !$('#sr')) return;
     SEARCH_CACHE.delete(key); SEARCH_CACHE.set(key, { at: Date.now(), items: r });
     while (SEARCH_CACHE.size > SEARCH_CACHE_MAX) SEARCH_CACHE.delete(SEARCH_CACHE.keys().next().value);
@@ -419,7 +692,8 @@ function doSearch(q) {
 
 function vLib() {
   const lossless = R.local.filter(t => t.lossless).length;
-  return `<h1 class="ttl">Library</h1><div class="grid">
+  return `<div class="lib-head rise"><div><div class="eyebrow">Your music</div><h1 class="ttl">Library</h1><p class="mut">${plural(S.playlists.length, 'playlist')} · ${plural(S.liked.length, 'liked song')}</p></div>
+    <div class="acts"><button class="btn" data-act="smartshuffle" title="Balanced shuffle across every playlist">${I.shuffle}Smart shuffle</button><button class="btn" data-act="remix">${I.mix}Remix playlists</button></div></div><div class="grid">
     ${tile(`<div class="cover liked">${I.heartF}</div>`, 'Liked Songs', `${S.liked.length} songs`, 'data-go="liked"', 0, `<button class="fab" data-act="playliked" title="Play">${I.playS}</button>`)}
     ${tile(`<div class="cover local-cover">${I.disc}</div>`, 'Local files', R.localReady ? `${R.local.length} songs${lossless ? ' · ' + lossless + ' lossless' : ''}` : 'FLAC, WAV, ALAC', 'data-go="local"', 1)}
     ${S.playlists.map((p, i) => plTile(p, i + 2)).join('')}
@@ -430,12 +704,14 @@ function vPlaylist(id) {
   const isL = id === 'liked';
   const pl = isL ? { name: 'Liked Songs', tracks: S.liked } : S.playlists.find(p => p.id === id);
   if (!pl) return '<div class="empty">That playlist doesn’t exist anymore.</div>';
+  const tracks = ctxList(id);
   const min = Math.round(pl.tracks.reduce((a, t) => a + (t.duration || 0), 0) / 60);
   const un = pl.tracks.filter(t => !t.ytId && !t.miss).length, miss = pl.tracks.filter(t => t.miss).length;
+  const hidden = pl.tracks.length - tracks.length;
   return `<div class="ph rise">
     ${isL ? `<div class="cover liked">${I.heartF}</div>` : `<div class="cover${TONE_IDS.has(pl.cover && pl.cover.tone) ? ' tone-' + pl.cover.tone : ''}" data-act="editpl" data-id="${pl.id}" title="Change cover">${coverContent(pl)}${pl.cover && pl.cover.url ? `<img src="${esc(pl.cover.url)}" alt="" onerror="this.remove()">` : ''}<span class="edit">${I.image}</span></div>`}
     <div class="ph-r"><div class="eyebrow">Playlist</div><h1 class="ttl">${esc(pl.name)}</h1>
-      <div class="meta">${pl.tracks.length} songs · ${min} min${miss ? ` · ${miss} without a match` : ''}</div>
+      <div class="meta">${pl.tracks.length} songs · ${min} min${miss ? ` · ${miss} without a match` : ''}${hidden ? ` · ${hidden} hidden by filters` : ''}</div>
       <div class="acts"><button class="btn acc" data-act="playall" data-id="${id}">${I.playS}Play</button>
         <button class="btn" data-act="shufflepl" data-id="${id}">${I.shuffle}Shuffle</button>
         ${NATIVE ? '' : `<button class="btn" data-act="dlall" data-id="${id}">${I.dl}Download all</button>`}
@@ -443,7 +719,75 @@ function vPlaylist(id) {
         ${un ? `<button class="btn" data-act="matchrest" data-id="${id}">Match ${un} remaining</button>` : ''}</div>
       <div class="matchbar${MQ.total ? ' on' : ''}" id="match-bar"><div class="lbl" id="match-lbl"></div><div class="dtw" style="pointer-events:none"><div class="dt"><i id="match-fill"></i></div></div></div>
     </div></div>
-    <div class="list">${pl.tracks.length ? rows(pl.tracks, id) : '<div class="empty">Empty for now. Use the ••• menu on any song to add it here.</div>'}</div>`;
+    <div class="list-tools">
+      <div class="chips sort-chips" aria-label="Sort songs">${SORT_KEYS.map(([k, n]) => `<button class="chip${(S.settings.plSort || 'added') === k ? ' on' : ''}" data-act="pl-sort" data-k="${k}">${n}</button>`).join('')}</div>
+      <div class="view-switch" role="group" aria-label="View"><button class="chip${(S.settings.plView || 'list') === 'list' ? ' on' : ''}" data-act="pl-view" data-k="list">List</button><button class="chip${S.settings.plView === 'grid' ? ' on' : ''}" data-act="pl-view" data-k="grid">Grid</button></div>
+    </div>
+    <div class="list${S.settings.plView === 'grid' ? ' grid' : ''}">${tracks.length ? rows(tracks, id) : '<div class="empty">Empty for now. Use the ••• menu on any song to add it here.</div>'}</div>`;
+}
+
+const fmtDuration = sec => {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  if (h) return `${h}h ${m ? m + 'm' : ''}`.trim();
+  if (m) return `${m}m`;
+  return `${sec}s`;
+};
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function vRecap(arg) {
+  const range = parseRecapRange(arg);
+  const from = range.from, to = range.to;
+  R.recapFrom = from; R.recapTo = to;
+  const r = recapData(from, to);
+  const years = recapYears();
+  const sameYear = from.slice(0, 4) === to.slice(0, 4);
+  const wholeYear = sameYear && from === `${from.slice(0, 4)}-01-01` && to === `${to.slice(0, 4)}-12-31`;
+  const headline = wholeYear ? from.slice(0, 4) : sameYear ? from.slice(0, 4) : `${from.slice(0, 4)}–${to.slice(0, 4)}`;
+  const months = Array(12).fill(0);
+  for (const [day, sec] of Object.entries(r.days)) {
+    const m = +String(day).slice(5, 7) - 1;
+    if (m >= 0 && m < 12) months[m] += +sec || 0;
+  }
+  const peak = Math.max(1, ...months);
+  const totalHours = r.seconds / 3600;
+  const top = r.topTracks[0];
+  const rank = (list, kind) => list.length ? `<div class="recap-list">${list.map((x, i) => `<div class="recap-row">
+      <span class="rk">${String(i + 1).padStart(2, '0')}</span>
+      ${kind === 'track' ? art({ art: x.art, title: x.title }, 'sm') : `<span class="recap-dot">${esc((x.name || x.title || '?')[0].toUpperCase())}</span>`}
+      <span class="rm"><b>${esc(x.title || x.name)}</b><small>${kind === 'track' ? esc(x.artist || '') : kind === 'artist' ? `${plural(x.plays, 'play')}` : `${plural(x.plays, 'play')}`}</small></span>
+      <span class="rv">${esc(fmtDuration(x.seconds))}</span></div>`).join('')}</div>` : `<div class="empty">Nothing here yet.</div>`;
+  return `<div class="recap rise">
+    <div class="recap-hero">
+      <div class="eyebrow">Listening recap</div>
+      <h1 class="recap-big">${headline}<span>WAVELENGTH</span></h1>
+      <p class="mut">${r.seconds ? `You listened for <b>${esc(fmtDuration(r.seconds))}</b> across ${plural(r.devices, 'device')}.` : 'Start playing music and your recap appears here. Listening time is counted on each device, then combined through sync.'}</p>
+      <div class="recap-range-label">${esc(dayLabel(from))} – ${esc(dayLabel(to))}${wholeYear ? '' : ' · custom range'}</div>
+      <div class="recap-controls">
+        <div class="chips recap-years">${years.map(v => `<button class="chip${wholeYear && v === +from.slice(0, 4) ? ' on' : ''}" data-act="recap-year" data-y="${v}">${v}</button>`).join('')}</div>
+        <div class="recap-dates">
+          <label><span>From</span><input type="date" id="recap-from" value="${from}" aria-label="Recap start date"></label>
+          <label><span>To</span><input type="date" id="recap-to" value="${to}" aria-label="Recap end date"></label>
+          <button class="btn solid" data-act="recap-range">${I.chart}Apply</button>
+        </div>
+      </div>
+    </div>
+    ${r.seconds && r.partial && !r.detailed ? `<div class="banner"><b>This range has older listening without daily detail.</b> Total time is complete, but song, artist and playlist rankings for part of a year start with this version. Pick a whole year to see full rankings.</div>` : ''}
+    ${r.seconds ? `<div class="recap-stats">
+      <div class="recap-stat"><small>Total time</small><b>${totalHours >= 10 ? Math.round(totalHours) : totalHours.toFixed(1)}h</b><span>${esc(plural(Math.round(r.seconds / 60), 'minute'))}</span></div>
+      <div class="recap-stat"><small>Songs played</small><b>${r.plays}</b><span>${plural(r.topTracks.length, 'song')} ranked</span></div>
+      <div class="recap-stat"><small>Top artist</small><b>${esc(r.topArtists[0] ? r.topArtists[0].name : '—')}</b><span>${r.topArtists[0] ? esc(fmtDuration(r.topArtists[0].seconds)) : 'No plays yet'}</span></div>
+      <div class="recap-stat"><small>Devices</small><b>${r.devices}</b><span>Merged by device</span></div>
+    </div>
+    ${top ? `<div class="recap-feature"><div class="recap-feature-art">${art({ art: top.art, title: top.title }, 'lg')}</div><div><div class="eyebrow">Most played song</div><h2>${esc(top.title)}</h2><p class="mut">${esc(top.artist || '')} · ${esc(fmtDuration(top.seconds))} · ${plural(top.plays, 'play')}</p></div></div>` : ''}
+    <div class="recap-months"><div class="sec"><h2>${wholeYear ? 'Across the year' : 'Across this range'}</h2><span class="meta">Listening time by month</span></div>
+      <div class="recap-chart">${months.map((v, i) => `<div class="rc-bar" title="${MONTHS[i]}: ${esc(fmtDuration(v))}"><i style="height:${Math.max(2, Math.round(v / peak * 100))}%"></i><span>${MONTHS[i][0]}</span></div>`).join('')}</div></div>
+    <div class="recap-cols">
+      <div><div class="sec"><h2>Top songs</h2><span class="meta">Per song</span></div>${rank(r.topTracks.slice(0, 8), 'track')}</div>
+      <div><div class="sec"><h2>Top playlists</h2><span class="meta">Per playlist</span></div>${rank(r.topPlaylists, 'playlist')}</div>
+    </div>
+    <div class="recap-cols"><div><div class="sec"><h2>Top artists</h2><span class="meta">Most time</span></div>${rank(r.topArtists, 'artist')}</div>
+      <div class="recap-note"><h2>About this recap</h2><p class="mut">Pick any start and end date, or jump to a year. Complete years use full-year totals; partial ranges use daily listening recorded from this version onward. Total time is complete either way. Wavelength merges devices without counting the same device twice, and YouTube does not provide reliable genre metadata, so this recap ranks artists, playlists and songs instead of inventing a genre.</p></div></div>` : ''}
+  </div>`;
 }
 
 function vLocal() {
@@ -649,6 +993,7 @@ function syncWhen(ts) {
   if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
+let mergeBusy = false, mergePreview = null;
 function syncHTML() {
   const s = R.sync;
   if (!s) return '<div class="sync-loading"><i></i>Reading device sync…</div>';
@@ -662,14 +1007,16 @@ function syncHTML() {
       <div class="sync-pair"><div><div class="set-label">Pairing code</div><code class="sync-code">${esc(s.code)}</code></div><button class="btn sm" data-act="sync-copy" data-copy="${esc(s.code)}">${I.copy}Copy</button></div>
       <div class="set-label">Host address</div>
       <div class="sync-urls">${urls.length ? urls.map(u => `<button class="sync-url" data-act="sync-copy" data-copy="${esc(u)}"><span>${esc(u)}</span>${I.copy}</button>`).join('') : '<div class="sync-url empty-url">No network address found. Connect Wi-Fi or Tailscale, then try again.</div>'}</div>
-      <p class="meta sync-note">Pair any device with the address and code above. Every paired guest can send its library here; the newest send wins, so treat the host as the shared copy.</p>
+      <p class="meta sync-note">Pair any device with the address and code above. Merge data combines both libraries; Send changes still replaces the host copy, so use it only when you mean to.</p>
+      <div class="line"><div><div class="l">Merge data</div><div class="s">${s.mergeReady ? `Combine this host with the last libraries sent by ${s.mergeCount === 1 ? esc(s.mergePeer || 'a paired device') : `${s.mergeCount} paired devices`}. New items are added; anything removed here is shown in a checklist first.` : 'A paired device must send its library first. On that device, open Devices and choose Merge data.'}</div></div><button class="btn" data-act="sync-merge"${s.mergeReady ? '' : ' disabled'}>Merge data</button></div>
       ${countLine}`;
   }
   if (s.role === 'guest') {
-    return `<div class="sync-hero"><div><span class="sync-badge on"><i></i>Connected to ${esc(s.peer || 'host')}</span><h3>This device follows a shared library.</h3><p class="mut">Pull when the host changes. Send when you changed playlists or liked songs here.</p></div><button class="btn" data-act="sync-disconnect">Disconnect</button></div>
+    return `<div class="sync-hero"><div><span class="sync-badge on"><i></i>Connected to ${esc(s.peer || 'host')}</span><h3>This device follows a shared library.</h3><p class="mut">Merge to combine both libraries. Pull when you want the host's copy to replace this device. Send when you want this device to replace the host.</p></div><button class="btn" data-act="sync-disconnect">Disconnect</button></div>
       ${err}
       <div class="sync-peer"><span class="meta">Host</span><code>${esc(s.hostUrl)}</code><span class="meta">Last sync · ${syncWhen(s.lastSync)}</span></div>
-      <div class="line"><div><div class="l">Pull the host library</div><div class="s">Playlists, liked songs and history replace this device's copy. Settings stay local.</div></div><button class="btn solid" data-act="sync-pull">Pull now</button></div>
+      <div class="line"><div><div class="l">Merge data</div><div class="s">Combine this device and the host. New items are added automatically; anything removed here but still on the host is shown in a checklist first.</div></div><button class="btn solid" data-act="sync-merge">Merge data</button></div>
+      <div class="line"><div><div class="l">Pull the host library</div><div class="s">Playlists, liked songs and history replace this device's copy. Settings stay local.</div></div><button class="btn" data-act="sync-pull">Pull now</button></div>
       <div class="line"><div><div class="l">Send this library</div><div class="s">Replace the host's playlists, liked songs and history with this device's copy.</div></div><button class="btn" data-act="sync-push">Send changes</button></div>
       ${countLine}`;
   }
@@ -683,15 +1030,53 @@ function syncHTML() {
     ${err}
     <div class="sync-options">
       <div class="sync-panel"><div class="eyebrow">Option one</div><h3>Host here</h3><p class="mut">Publish this device's playlists to a paired device. The host only runs while Wavelength is open.</p><button class="btn solid" data-act="sync-host">${I.link}Start hosting</button></div>
-      <div class="sync-panel"><div class="eyebrow">Option two</div><h3>Join a host</h3><p class="mut">Paste the host address and pairing code. Joining pulls the host library to this device.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://100.x.x.x:${s.port || ''}" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
+      <div class="sync-panel"><div class="eyebrow">Option two</div><h3>Join a host</h3><p class="mut">Paste the host address and pairing code. Connecting merges this device with the host so neither library is replaced.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://100.x.x.x:${s.port || ''}" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
     </div>`;
+}
+async function applyMerge(selected) {
+  try {
+    const host = R.sync?.role === 'host';
+    R.sync = await api('/api/sync/merge', { json: selected ? { selected } : {} });
+    await refreshLibraryState();
+    syncPaint();
+    mergePreview = null;
+    toast(host ? 'Device data merged into this host' : 'Both libraries merged');
+    return true;
+  } catch (e) {
+    toast(e.message);
+    await syncLoad(true);
+    return false;
+  }
+}
+function mergeModal(p) {
+  const rp = (p.removed && p.removed.playlists) || [];
+  const rs = (p.removed && p.removed.songs) || [];
+  const rl = (p.removed && p.removed.liked) || [];
+  const rn = rp.length + rs.length + rl.length;
+  const src = (p.sources || []).filter(Boolean).join(', ') || (p.role === 'host' ? 'the paired devices' : 'the host');
+  const addN = (p.add.playlists || []).length + (p.add.songs || []).length + (p.add.liked || []).length;
+  const chip = (n, one, many) => n ? `<span><b>${n}</b> ${n === 1 ? one : many}</span>` : '';
+  const row = (kind, i, title, sub) => `<label class="merge-pick"><input type="checkbox" data-mk="${kind}" data-mi="${i}" checked><span class="mm"><span class="mt">${esc(title)}</span><span class="ms">${esc(sub)}</span></span></label>`;
+  const group = (label, items) => items ? `<div class="merge-h"><div class="set-label">${label}</div></div><div class="merge-list">${items}</div>` : '';
+  const playlists = rp.map((x, i) => row('p', i, x.name || 'Untitled playlist', plural(x.count || 0, 'song'))).join('');
+  const songs = rs.map((x, i) => row('s', i, x.title || 'Untitled song', `${x.artist || 'Unknown artist'} · ${x.playlist || 'Playlist'}`)).join('');
+  const liked = rl.map((x, i) => row('l', i, x.title || 'Untitled song', `${x.artist || 'Unknown artist'} · Liked Songs`)).join('');
+  modal(`<div class="eyebrow">Merge data</div>
+    <h3 class="imp-title">Keep new, choose what returns</h3>
+    <p class="mut">${addN ? `${plural(addN, 'new item')} from ${esc(src)} will be added automatically.` : `Nothing new is waiting from ${esc(src)}.`} ${plural(rn, 'item')} still ${rn === 1 ? 'exists' : 'exist'} there but ${rn === 1 ? 'was' : 'were'} removed here. Tick the ones to add back; unchecked items stay only on the other copy.</p>
+    ${addN ? `<div class="merge-summary">${chip((p.add.playlists || []).length, 'new playlist', 'new playlists')}${chip((p.add.songs || []).length, 'new song', 'new songs')}${chip((p.add.liked || []).length, 'new liked song', 'new liked songs')}${chip(p.add.history || 0, 'history entry', 'history entries')}</div>` : ''}
+    <div class="merge-h"><div class="set-label">Removed from this device</div><div class="merge-tools"><button class="btn sm" data-act="merge-all">Select all</button><button class="btn sm" data-act="merge-none">Clear</button></div></div>
+    ${group('Playlists', playlists)}
+    ${group('Songs', songs)}
+    ${group('Liked songs', liked)}
+    <div class="acts end"><button class="btn" data-act="close-modal">Cancel</button><button class="btn solid" data-act="merge-apply">Merge with selected</button></div>`, 'merge-sheet');
 }
 function accessHTML() {
   if (NATIVE) {
     return `<div class="access-box">
       <div class="set-label">This phone</div>
       <p class="mut">The library, search and playback all run on this device. Songs stream from YouTube over the internet; your playlists are stored in the app.</p>
-      <p class="meta sync-note">A computer is optional. Use <b>Devices</b> above to pull a library from a Wavelength host, then disconnect and keep listening with the computer off.</p>
+      <p class="meta sync-note">A computer is optional. Use <b>Devices</b> above to merge or pull a library from a Wavelength host, then disconnect and keep listening with the computer off.</p>
     </div>`;
   }
   const h = R.health || {};
@@ -743,8 +1128,9 @@ async function refreshLibraryState() {
   if (Array.isArray(st.playlists)) S.playlists = st.playlists;
   if (Array.isArray(st.liked)) S.liked = st.liked;
   if (Array.isArray(st.history)) S.history = st.history;
+  if (st.listening && typeof st.listening === 'object' && st.listening.devices) S.listening = st.listening;
   drawSide();
-  if (['home', 'library', 'playlist', 'liked', 'local', 'settings'].includes(curRoute)) draw();
+  if (['home', 'library', 'playlist', 'liked', 'local', 'settings', 'recap'].includes(curRoute)) draw();
 }
 function filterSettings() {
   const q = ($('#set-find')?.value || '').toLowerCase().trim();
@@ -775,10 +1161,11 @@ function vSet() {
       <button data-scroll="set-appearance"><span class="so-ic">${I.sun}</span><span><small>Theme</small><b>${esc(themeLabel())}</b></span></button>
       <button data-scroll="set-playback"><span class="so-ic">${I.wave}</span><span><small>Streaming</small><b>${s.streamQuality === 'saver' ? 'Data saver' : 'Best available'}</b></span></button>
       <button data-scroll="set-sync"><span class="so-ic">${I.link}</span><span><small>Devices</small><b id="sync-summary">${syncStatusLabel()}</b></span></button>
+      <button data-scroll="set-filters"><span class="so-ic">${I.block}</span><span><small>Library filters</small><b>${s.noAi || (s.blockedArtists || []).length ? 'On' : 'Off'}</b></span></button>
     </div>
     <div class="set-find rise" style="--i:1">${I.search}<input id="set-find" type="search" placeholder="Find a setting — theme, audio, sync…" autocomplete="off" aria-label="Find a setting"><button class="set-find-clear" data-act="set-clear" title="Clear filter" aria-label="Clear filter">${I.close}</button></div>
     <nav class="set-jump rise" aria-label="Settings sections">
-      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button><button data-scroll="set-status">Status</button>
+      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-filters">Filters</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button><button data-scroll="set-status">Status</button>
     </nav>
     <div id="set-empty" class="empty set-empty" hidden>No setting matches that search.</div><div class="set">
     <div class="box rise" style="--i:0" id="set-appearance"><h2>Appearance</h2><p class="mut">Choose a palette, then tune the accent. Interface styles are layered on top without changing your colors.</p>
@@ -798,11 +1185,20 @@ function vSet() {
       <div class="line"><div><div class="l">Motion</div><div class="s">Reduce transitions and visual movement across the app.</div></div><select class="inp" data-set="motion" aria-label="Motion preference"><option value="system"${s.motion === 'reduced' ? '' : ' selected'}>Match system</option><option value="reduced"${s.motion === 'reduced' ? ' selected' : ''}>Reduced</option></select></div>
       ${NATIVE ? '' : `${tg('viz', 'Show in full-screen player', 'Reacts to the real audio, not a fake animation.')}
       <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>`}</div>
-    <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs.')}
+    <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs. Never used while shuffle is on.')}
       ${NATIVE ? '' : tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
+      ${NATIVE ? `<div class="line"><div><div class="l">Smart volume</div><div class="s">Not available on Android yet. This build plays YouTube audio directly, outside the Web Audio graph used for loudness balancing.</div></div><span class="meta">Desktop / browser</span></div>` : tg('smartVolume', 'Smart volume', 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
+      ${tg('skipCredits', 'Skip credits &amp; outros', 'Best effort. Only skips when the video’s own chapter or segment data clearly labels a credits/outro section.')}
+      ${tg('headphonesPause', 'Pause when headphones disconnect', NATIVE ? 'Android pauses playback when Bluetooth or wired audio disconnects.' : 'Best effort in the browser. Android handles this natively.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
       <div class="line"><div><div class="l">Sleep timer</div><div class="s" id="sleep-status">${sleepText()}</div></div><select class="inp" data-set="sleep" aria-label="Sleep timer">${rem ? `<option value="active" selected>${sleepLabel(rem)} left</option>` : ''}<option value="0">Off</option>${sleepOpts}</select></div></div>
+    <div class="box rise" style="--i:2" id="set-filters"><h2>Library filters</h2><p class="mut">Hide songs you do not want to see. These filters apply to search, playlists and history on this device.</p>
+      ${tg('noAi', 'No AI', 'Best-effort keyword filter for titles and artists that mention AI, generated music, Suno, Udio and similar. It cannot reliably detect AI music.')}
+      <div class="line"><div><div class="l">Blocked artists</div><div class="s">${(s.blockedArtists || []).length ? 'Songs by these artists are hidden.' : 'No artists blocked yet.'}</div></div></div>
+      ${(s.blockedArtists || []).length ? `<div class="chips block-chips">${s.blockedArtists.map(a => `<button class="chip on" data-act="unblock-artist" data-a="${esc(a)}" title="Unblock ${esc(a)}">${esc(a)} ${I.close}</button>`).join('')}</div>` : ''}
+      <div class="line"><div class="inline" style="flex:1;justify-content:flex-end"><input class="inp" id="block-artist" type="text" placeholder="Artist name" aria-label="Artist name to block"><button class="btn" data-act="block-artist">Block</button></div></div>
+      <div class="line"><div class="l">Listening recap</div><button class="btn" data-go="recap">${I.chart}Open recap</button></div></div>
     <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div><div id="access-box">${accessHTML()}</div></div>
     ${NATIVE ? `<div class="box rise" style="--i:3" id="set-storage"><h2>Storage</h2>
       <p class="mut">Playlists, liked songs and history live on this phone. Songs stream on demand and are not saved for offline listening yet.</p>
@@ -828,7 +1224,7 @@ function vSet() {
 
 /* ═════════ router ═════════ */
 let curRoute = 'home', curArg = '', routeTok = 0, drawn = false;
-const V = { share: a => { if (R.sharing !== a) { R.sharing = a; importLink(a); } return '<h1 class="ttl">Importing…</h1>' + loader(); }, home: vHome, search: vSearch, library: vLib, local: vLocal, playlist: vPlaylist, liked: () => vPlaylist('liked'), import: vImport, downloads: vDl, settings: vSet };
+const V = { share: a => { if (R.sharing !== a) { R.sharing = a; importLink(a); } return '<h1 class="ttl">Importing…</h1>' + loader(); }, home: vHome, search: vSearch, library: vLib, local: vLocal, playlist: vPlaylist, liked: () => vPlaylist('liked'), import: vImport, downloads: vDl, settings: vSet, recap: vRecap };
 function draw() { $('#view').innerHTML = (V[curRoute] || vHome)(curArg); updMatch(); requestAnimationFrame(observeRows); }
 
 /* Resolve visible rows before they are clicked. IntersectionObserver keeps
@@ -896,7 +1292,7 @@ const audioA = $('#audio'), audioB = $('#audio-b');
 let audio = audioA, spareAudio = audioB;
 const audioEls = [audioA, audioB];
 let preparedNext = null;
-let actx, analyser, gain, freq, wave;
+let actx, analyser, gain, normGain, limiter, freq, wave;
 function ensureGraph() {
   if (NATIVE) return;
   if (actx) return;
@@ -904,17 +1300,42 @@ function ensureGraph() {
     actx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = actx.createAnalyser(); analyser.fftSize = 512; analyser.smoothingTimeConstant = 0.78;
     gain = actx.createGain();
+    normGain = actx.createGain(); normGain.gain.value = 1;
+    limiter = actx.createDynamicsCompressor();
+    limiter.threshold.value = -10; limiter.knee.value = 8;
+    limiter.ratio.value = 6; limiter.attack.value = 0.003; limiter.release.value = 0.25;
     for (const el of audioEls) {
       if (el.__wlSource) continue;
       const src = actx.createMediaElementSource(el);
       src.connect(analyser);
       el.__wlSource = src;
     }
-    analyser.connect(gain); gain.connect(actx.destination);
+    analyser.connect(normGain); normGain.connect(limiter); limiter.connect(gain); gain.connect(actx.destination);
     freq = new Uint8Array(analyser.frequencyBinCount); wave = new Uint8Array(analyser.fftSize);
     for (const el of audioEls) el.volume = 1;
     applyVol();
   } catch { actx = null; analyser = null; }
+}
+/* Loudness balancing uses the actual waveform, not a lookup table. It nudges
+   the gain toward a comfortable RMS while a compressor catches peaks. This is
+   best-effort and does not work in the Android WebView, which bypasses Web
+   Audio for cross-origin streams. */
+function smartVolumeTick() {
+  if (NATIVE || !analyser || !normGain || !R.playing || !S.settings.smartVolume) return;
+  const now = performance.now();
+  if (now - (R.normAt || 0) < 700) return;
+  R.normAt = now;
+  try {
+    analyser.getByteTimeDomainData(wave);
+    let sum = 0;
+    for (let i = 0; i < wave.length; i += 2) { const v = (wave[i] - 128) / 128; sum += v * v; }
+    const rms = Math.sqrt(sum / Math.max(1, wave.length / 2));
+    if (rms < 0.012) return; // silence / near-silence
+    const target = 0.15;
+    const want = Math.max(0.45, Math.min(1.65, target / rms));
+    R.normGain += (want - R.normGain) * 0.22;
+    normGain.gain.setTargetAtTime(R.normGain, actx.currentTime, 0.3);
+  } catch {}
 }
 function applyVol() {
   const v = R.muted ? 0 : S.settings.volume;
@@ -1192,8 +1613,10 @@ function peekNextIdx() {
   if (R.queue.length < 2) return -1;
   syncShuffleOrder();
   if (R.shufflePos + 1 >= R.shuffleOrder.length) {
-    R.shuffleOrder = shuffleIndices(R.queue.length, R.idx);
-    R.shufflePos = 0;
+    // A shuffle cycle plays every song once. Only repeat-all starts another.
+    if (R.repeat !== 1) return -1;
+    R.shuffleOrder = shuffleIndices(R.queue.length, -1);
+    R.shufflePos = -1;
   }
   return R.shuffleOrder[R.shufflePos + 1] ?? -1;
 }
@@ -1252,6 +1675,7 @@ function usePrepared(p) {
   spareAudio = old;
   try { old.pause(); old.removeAttribute('src'); old.load(); } catch {}
   R.idx = p.idx; R.cur = p.t; R.resumeTime = 0;
+  creditsFor(p.t);
   const my = ++playTok;
   clearSkip();
   loadingTrack = my;
@@ -1261,6 +1685,7 @@ function usePrepared(p) {
   audio.play().then(() => {
     if (my !== playTok) return;
     S.history = [{ ...R.cur }, ...S.history.filter(x => uid(x) !== uid(R.cur))].slice(0, 40);
+    countPlay();
     save(); saveSession(true); mediaSession(); warmNext(); startStall();
   }).catch(e => {
     if (my !== playTok || e.name === 'AbortError') return;
@@ -1268,15 +1693,26 @@ function usePrepared(p) {
   });
 }
 
-const play = (list, i) => { R.queue = [...list]; resetShuffleOrder(); renderQueue(); playIdx(i); };
+const play = (list, i, ctx) => {
+  R.queue = [...list];
+  if (ctx) R.playCtx = ctxName(ctx);
+  resetShuffleOrder(); renderQueue(); playIdx(i);
+};
 
 async function playIdx(i, startAt = 0) {
   const t = R.queue[i]; if (!t) return;
+  if (!allowed(t)) {
+    let j = i + 1;
+    while (j < R.queue.length && !allowed(R.queue[j])) j++;
+    if (j < R.queue.length) return playIdx(j, startAt);
+    setPlaying(false); toast('Everything left is hidden by your filters'); return;
+  }
   const my = ++playTok;
   R.idx = i; R.cur = t; R.resumeTime = 0;
   clearStall(); ensureGraph(); uiNow(); setBuffering(true);
   cancelPrepared();
   clearSkip();
+  creditsFor(t);
   mediaErrRetries = 0;
 
   // Step 1: resolve YouTube ID if missing. Local files are already ready.
@@ -1395,6 +1831,7 @@ async function doPlayTrack(t, my, attempt, startAt = 0) {
 
   if (my !== playTok) return;
   S.history = [{ ...R.cur }, ...S.history.filter(x => uid(x) !== uid(R.cur))].slice(0, 40);
+  countPlay();
   save(); saveSession(true); mediaSession(); warmNext(); startStall();
 }
 
@@ -1457,9 +1894,12 @@ function pumpWarm() {
 }
 
 async function extend() {
+  // Shuffle is a closed set: it must never pull in songs from outside the
+  // playlist/search the user started. A shuffled queue simply ends.
+  if (R.shuffle) return 0;
   if (extending || !R.cur || !R.cur.ytId) return 0; extending = true;
   try {
-    const r = await api('/api/related/' + R.cur.ytId);
+    const r = await api('/api/related/' + R.cur.ytId + (S.settings.noAi ? '?noAi=1' : ''));
     const have = new Set(R.queue.map(t => t.ytId).filter(Boolean));
     const add = r.filter(t => !have.has(t.ytId)).slice(0, 12).map(t => ({ ...t, auto: true }));
     R.queue.push(...add); refreshQueue(); renderQueue(); return add.length;
@@ -1468,9 +1908,13 @@ async function extend() {
 
 async function next() {
   if (!R.queue.length) return;
-  let i;
-  if (R.shuffle && R.queue.length > 1) i = peekNextIdx();
-  else i = R.idx + 1;
+  if (R.shuffle) {
+    const i = peekNextIdx();
+    if (i < 0) { setPlaying(false); return; }
+    playIdx(i);
+    return;
+  }
+  let i = R.idx + 1;
   if (i < 0 || i >= R.queue.length) {
     if (R.repeat === 1) { i = 0; }
     else if (S.settings.autoplay && await extend()) { toast('Endless: queued similar songs'); i = R.idx + 1; }
@@ -1488,7 +1932,7 @@ function prev() {
 
 function togglePlay() {
   if (!R.cur) {
-    if (S.history.length) play(S.history, 0);
+    if (S.history.length) play(S.history, 0, 'history');
     else toast('Pick a song to start');
     return;
   }
@@ -1518,7 +1962,8 @@ function setPlaying(p) {
   R.playing = p;
   document.body.classList.toggle('playing', p);
   setDm(p);
-  if (!p) { clearStall(); setBuffering(false); saveSession(true); }
+  if (p) startListening();
+  if (!p) { clearStall(); setBuffering(false); flushListening(); saveSession(true); }
   if (NATIVE) {
     try { window.AndroidBridge.setPlaybackState(!!p, audio.currentTime || 0, isFinite(audio.duration) ? audio.duration : (R.cur && R.cur.duration) || 0); } catch {}
   } else if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p ? 'playing' : 'paused';
@@ -1534,6 +1979,44 @@ function onEnded() {
     return;
   }
   next();
+}
+
+/* ═════════ credits / outro skipping ═════════ */
+/* Only the video's own chapter/segment titles are used. Matching ordinary
+   endings would cut real songs short, so the marker must sit in the second
+   half and contain an explicit credits/outro word. */
+const CREDIT_RE = /\b(credits?|end credits|outro|thanks? for watching|acknowledg|farewell|goodbye|end card|outro music)\b/i;
+function creditsApply(t, info) {
+  if (!info || !t || uid(t) !== uid(R.cur || {})) return;
+  const dur = +t.duration || 0;
+  const list = Array.isArray(info.chapters) ? info.chapters : Array.isArray(info.segments) ? info.segments : [];
+  let at = 0;
+  for (const c of list) {
+    const start = +c.start || 0;
+    const title = String(c.title || '');
+    if (start > 30 && CREDIT_RE.test(title) && (!dur || start >= dur * 0.5) && (!dur || start < dur - 4)) { at = start; break; }
+  }
+  R.credits = at ? { at, dur } : null;
+}
+function creditsFor(t) {
+  R.credits = null; R.creditDone = '';
+  if (!S.settings.skipCredits || !t || !t.ytId) return;
+  const id = t.ytId;
+  const hit = R.infoCache[id];
+  if (hit) { creditsApply(t, hit); return; }
+  api('/api/info/' + encodeURIComponent(id)).then(info => {
+    R.infoCache[id] = info || {};
+    if (R.cur && uid(R.cur) === uid(t)) creditsApply(t, info);
+  }).catch(() => {});
+}
+function creditsTick(c, d) {
+  if (!S.settings.skipCredits || !R.cur || !R.credits || !d) return;
+  if (R.creditDone === uid(R.cur)) return;
+  if (c + 0.4 < R.credits.at) return;
+  R.creditDone = uid(R.cur);
+  if (R.repeat === 2) return;
+  if (canNext()) { toast('Skipped credits'); next(); }
+  else { try { audio.currentTime = Math.max(0, d - 1); } catch {} }
 }
 
 for (const el of audioEls) {
@@ -1592,6 +2075,8 @@ function uiTime() {
   for (const e of totEls) if (e.textContent !== tot) e.textContent = tot;
   $$('[data-seek]').forEach(el => { el.setAttribute('aria-valuenow', d ? Math.round(c / d * 100) : 0); el.setAttribute('aria-valuetext', `${fmt(c)} of ${fmt(d)}`); });
   mediaPos(c, d);
+  smartVolumeTick();
+  creditsTick(c, d);
 }
 function seekPreview(f, final) {
   const d = (isFinite(audio.duration) && audio.duration) || (R.cur && R.cur.duration) || 0; if (!d) return;
@@ -1644,10 +2129,42 @@ function mediaPos(c, d) {
   lastPos = Math.floor(c); try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: 1, position: Math.min(c, d) }); } catch {}
 }
 
+/* Best-effort web/desktop headphone detection. Android does this natively via
+   ACTION_AUDIO_BECOMING_NOISY; browsers only expose coarse devicechange
+   events, and some only after microphone permission. */
+let outputWatch = false;
+async function outputSnapshot() {
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    return new Set(list.filter(d => d.kind === 'audiooutput').map(d => d.deviceId || d.label).filter(Boolean));
+  } catch { return null; }
+}
+async function watchAudioOutputs() {
+  if (NATIVE || outputWatch || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  outputWatch = true;
+  let known = await outputSnapshot();
+  const onChange = async () => {
+    const now = await outputSnapshot();
+    const gone = known && now ? [...known].filter(id => !now.has(id)) : [];
+    known = now;
+    if (gone.length && S.settings.headphonesPause && R.playing && audio && !audio.paused) {
+      audio.pause();
+      toast('Audio output disconnected — paused');
+    }
+  };
+  try { navigator.mediaDevices.addEventListener('devicechange', onChange); }
+  catch { try { navigator.mediaDevices.ondevicechange = onChange; } catch {} }
+}
+
+function syncNativePrefs() {
+  if (!NATIVE) return;
+  try { window.AndroidBridge.setHeadphonesPause(!!S.settings.headphonesPause); } catch {}
+}
+
 /* Commands from the lock screen, Bluetooth headset and notification. */
 window.wlNativeCmd = (cmd, arg) => {
   if (cmd === 'play') {
-    if (!R.cur) { if (S.history.length) play(S.history, 0); return; }
+    if (!R.cur) { if (S.history.length) play(S.history, 0, 'history'); return; }
     if (audio.paused) togglePlay();
   } else if (cmd === 'pause') {
     audio.pause();
@@ -1676,7 +2193,7 @@ function saveSession(force = false) {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify({
       queue: R.queue.slice(0, 250), idx: R.idx, cur: R.cur,
-      time: R.resumeTime || audio.currentTime || 0,
+      time: R.resumeTime || audio.currentTime || 0, ctx: R.playCtx || '',
       shuffle: R.shuffle, repeat: R.repeat, at: now
     }));
   } catch {}
@@ -1690,6 +2207,7 @@ function restoreSession() {
   R.idx = Math.max(0, Math.min(+st.idx || 0, R.queue.length - 1));
   R.cur = R.queue[R.idx] || st.cur;
   if (!R.cur) return;
+  R.playCtx = typeof st.ctx === 'string' ? st.ctx : '';
   R.shuffle = !!st.shuffle;
   R.repeat = [0, 1, 2].includes(+st.repeat) ? +st.repeat : 0;
   R.resumeTime = Math.max(0, +st.time || 0);
@@ -1732,7 +2250,7 @@ function hl() {
 }
 function toggleLike(t) {
   if (liked(t)) S.liked = S.liked.filter(x => !(uid(x) === uid(t) || (x.ytId && x.ytId === t.ytId)));
-  else { S.liked.unshift({ ...t }); toast('Added to Liked Songs'); }
+  else { S.liked.unshift({ ...t, addedAt: Date.now() }); toast('Added to Liked Songs'); }
   save(); drawSide(); hl(); if (curRoute === 'liked' || curRoute === 'library') draw();
 }
 function renderQueue() {
@@ -1749,7 +2267,7 @@ async function startRadio(t) {
     if (!t.ytId) { toast('Finding the song first…'); await resolve(t); }
     if (!t.ytId) return toast('No YouTube match for that song');
     toast('Starting a station…');
-    const list = await api('/api/related/' + t.ytId);
+    const list = await api('/api/related/' + t.ytId + (S.settings.noAi ? '?noAi=1' : ''));
     R.shuffle = false;
     R.queue = [{ ...t }, ...list.filter(x => x.ytId !== t.ytId).map(x => ({ ...x, auto: true }))];
     R.idx = 0; refreshQueue(); renderQueue(); playIdx(0); nav('home'); saveSession(true);
@@ -1769,10 +2287,17 @@ function openMenu(ctx, i, x, y) {
     ...(t.localId ? [] : [['Download MP3', 'dl', () => download(t)]]),
     ['Copy song details', 'copy', () => copyText(`${t.title} — ${t.artist || 'Unknown artist'}`)],
   ];
+  if (t.artist && !isBlocked(t)) it.push(['Block this artist', 'block', () => {
+    const name = t.artist.trim();
+    if (!(S.settings.blockedArtists || []).some(a => normArtist(a) === normArtist(name))) {
+      S.settings.blockedArtists = [...(S.settings.blockedArtists || []), name].slice(0, 200);
+      save(); draw(); hl(); toast(`Blocked ${name}`);
+    }
+  }]);
   if (t.ytId && !t.localId) it.push(['Copy YouTube link', 'link', () => copyText('https://www.youtube.com/watch?v=' + t.ytId)]);
   if (ctx === 'queue') it.push(['Remove from queue', 'trash', () => { R.queue.splice(i, 1); if (i <= R.idx) R.idx--; refreshQueue(); renderQueue(); saveSession(true); }]);
   else if (ctx === 'local') it.push(['Delete local file', 'trash', () => deleteLocalTrack(t)]);
-  else if (!['search', 'history'].includes(ctx)) it.push(['Remove from this list', 'trash', () => { ctxList(ctx).splice(i, 1); save(); drawSide(); draw(); saveSession(true); }]);
+  else if (!['search', 'history'].includes(ctx)) it.push(['Remove from this list', 'trash', () => removeFromCtx(ctx, t)]);
   R.menu = it; const m = $('#menu');
   m.innerHTML = it.map((x, k) => `<button data-mi="${k}">${I[x[1]]}${x[0]}</button>`).join('');
   m.style.left = Math.min(x, innerWidth - 250) + 'px'; m.style.top = Math.min(y, innerHeight - 20 - it.length * 44) + 'px'; m.classList.add('open');
@@ -1796,6 +2321,7 @@ function closeModal(save_) {
     if (IMPORT) IMPORT.up.forEach(delCover);
   }
   M = null; IMPORT = null;
+  mergePreview = null;
   const back = modalReturn; modalReturn = null;
   if (back && document.contains(back) && back.focus) back.focus({ preventScroll: true });
 }
@@ -1896,7 +2422,7 @@ function savePl() {
     if (oldUrl && oldUrl !== cover.url) delCover(oldUrl);
   } else { pl = { id: rid(), name, cover, tracks: [] }; S.playlists.push(pl); }
   M.up.filter(u => u !== cover.url).forEach(delCover);
-  if (M.addTrack && !pl.tracks.some(x => uid(x) === uid(M.addTrack))) { pl.tracks.push({ ...M.addTrack }); toast(`Added to ${pl.name}`); } else toast(M.id ? 'Saved' : `“${name}” created`);
+  if (M.addTrack && !pl.tracks.some(x => uid(x) === uid(M.addTrack))) { pl.tracks.push({ ...M.addTrack, addedAt: Date.now() }); toast(`Added to ${pl.name}`); } else toast(M.id ? 'Saved' : `“${name}” created`);
   save(); closeModal(true); drawSide(); refreshView(); saveSession();
 }
 function addToPl(t) {
@@ -2014,17 +2540,21 @@ async function uploadImportCover(file) {
 }
 function commitImport(d, cover) {
   if (!d.tracks.length) return toast('No songs found in that link');
-  if (d.kind === 'track') { closeModal(true); play(d.tracks, 0); nav('home'); return toast('Playing ' + d.tracks[0].title); }
+  if (d.kind === 'track') { closeModal(true); play(d.tracks, 0, 'search'); nav('home'); return toast('Playing ' + d.tracks[0].title); }
   if (d.kind === 'liked') {
     const have = new Set(S.liked.map(t => t.spId).filter(Boolean));
-    const add = d.tracks.filter(t => !have.has(t.spId));
+    const add = d.tracks.filter(t => !have.has(t.spId)).map(t => ({ ...t, addedAt: Date.now() }));
     S.liked = [...add, ...S.liked]; save(); closeModal(true); drawSide(); startMatching(add); nav('liked');
     toast(`${add.length} liked songs added`); return;
   }
   let pl = d.kind === 'playlist' && d.id ? S.playlists.find(p => p.spId === d.id) : null;
   const existed = !!pl;
   const old = new Map(pl ? pl.tracks.filter(t => t.spId).map(t => [t.spId, t]) : []);
-  const tracks = d.tracks.map(t => { const o = old.get(t.spId); return o ? { ...t, ytId: o.ytId, miss: o.miss, art: o.art || t.art } : t; });
+  const now = Date.now();
+  const tracks = d.tracks.map(t => {
+    const o = old.get(t.spId);
+    return o ? { ...t, ytId: o.ytId, miss: o.miss, art: o.art || t.art, addedAt: o.addedAt || now } : { ...t, addedAt: now };
+  });
   const nextCover = cover || (pl && pl.cover) || (d.image ? { url: d.image } : { emoji: '🟢', tone: 'moss' });
   const oldCover = pl && pl.cover && pl.cover.url;
   if (pl) {
@@ -2186,13 +2716,87 @@ function showShortcuts() {
     <div class="acts end"><button class="btn solid" data-act="close-modal">Done</button></div>`, 'shortcut-sheet');
 }
 const rowTrack = el => { const r = el.closest('.row'); return r ? ctxList(r.dataset.ctx)[+r.dataset.i] : R.cur; };
+function libraryTracks() {
+  const seen = new Set(), out = [];
+  const add = t => {
+    if (!t || !allowed(t)) return;
+    const k = uid(t); if (!k || seen.has(k)) return;
+    seen.add(k); out.push(t);
+  };
+  S.liked.forEach(add);
+  S.playlists.forEach(p => (p.tracks || []).forEach(add));
+  return out;
+}
+const shuffled = list => {
+  const a = list.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+};
+/* Balance by artist: round-robin artists so one artist cannot dominate a run.
+   Then avoid placing the same artist twice in a row when another is available. */
+function balancedQueue(tracks) {
+  const groups = new Map();
+  for (const t of tracks) {
+    const k = normArtist(t.artist) || 'unknown';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(t);
+  }
+  const keys = [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length);
+  for (const k of keys) groups.set(k, shuffled(groups.get(k)));
+  const out = [];
+  let last = '';
+  while (out.length < tracks.length) {
+    let pick = keys.find(k => groups.get(k).length && k !== last) || keys.find(k => groups.get(k).length);
+    if (!pick) break;
+    out.push(groups.get(pick).shift());
+    last = pick;
+  }
+  return out;
+}
+function smartQueue() { return balancedQueue(libraryTracks()); }
+function remixQueue(size, includeLiked) {
+  const sources = S.playlists.filter(p => p.tracks && p.tracks.length).map(p => ({ name: p.name, list: shuffled(p.tracks.filter(allowed)) }));
+  if (includeLiked && S.liked.length) sources.unshift({ name: 'Liked Songs', list: shuffled(S.liked.filter(allowed)) });
+  if (!sources.length) return [];
+  const out = [], seen = new Set();
+  const cap = size > 0 ? size : Infinity;
+  while (out.length < cap && sources.some(s => s.list.length)) {
+    for (const s of sources) {
+      if (out.length >= cap) break;
+      while (s.list.length) {
+        const t = s.list.shift(), k = uid(t);
+        if (seen.has(k)) continue;
+        seen.add(k); out.push({ ...t, addedAt: Date.now() }); break;
+      }
+    }
+  }
+  return out;
+}
+function remixModal() {
+  const stamp = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  modal(`<div class="eyebrow">Remix</div><h3 class="imp-title">Mix your playlists</h3>
+    <p class="mut" style="margin-bottom:16px">Round-robins through your playlists and creates a new one. Duplicates are removed, and nothing leaves the original playlists.</p>
+    <label class="set-label" for="remix-name">Playlist name</label>
+    <input class="inp" id="remix-name" value="Remix · ${esc(stamp)}" autocomplete="off">
+    <label class="set-label" for="remix-size">Length</label>
+    <select class="inp" id="remix-size"><option value="20">20 songs</option><option value="40" selected>40 songs</option><option value="60">60 songs</option><option value="0">Everything</option></select>
+    <label class="line check-line"><input type="checkbox" id="remix-liked" checked> <span><b>Include Liked Songs</b><small>Pull liked songs into the rotation too.</small></span></label>
+    <div class="acts end"><button class="btn" data-act="close-modal">Cancel</button><button class="btn solid" data-act="remix-go">${I.mix}Create remix</button></div>`, 'remix-sheet');
+}
 const acts = {
   play: togglePlay, prev, next: () => { if (canNext()) next(); },
   shuffle: () => {
     R.shuffle = !R.shuffle;
+    if (R.shuffle) {
+      // Endless/radio tracks were added for sequential playback. Shuffle is a
+      // closed set, so drop them instead of mixing in songs from elsewhere.
+      const keep = R.cur;
+      R.queue = R.queue.filter(t => !t.auto || (keep && uid(t) === uid(keep)));
+      R.idx = keep ? Math.max(0, R.queue.findIndex(t => uid(t) === uid(keep))) : -1;
+    }
     $$('[data-act=shuffle]').forEach(b => b.classList.toggle('on', R.shuffle));
-    refreshQueue();
-    toast('Shuffle ' + (R.shuffle ? 'on' : 'off'));
+    refreshQueue(); renderQueue();
+    toast(R.shuffle ? 'Shuffle on · stays inside this list' : 'Shuffle off');
   },
   repeat: () => { R.repeat = (R.repeat + 1) % 3; $$('[data-act=repeat]').forEach(b => { b.innerHTML = R.repeat === 2 ? I.repeat1 : I.repeat; b.classList.toggle('on', R.repeat > 0); }); toast(['Repeat off', 'Repeat all', 'Repeat one'][R.repeat]); },
   mute: () => { R.muted = !R.muted; applyVol(); },
@@ -2203,10 +2807,55 @@ const acts = {
   'viz-style': () => { S.settings.vizStyle = VSTYLES[(VSTYLES.indexOf(S.settings.vizStyle) + 1) % VSTYLES.length]; save(); vizSync(); },
   like: el => { const t = rowTrack(el); if (t) toggleLike(t); },
   menu: el => { const r = el.closest('.row'), b = el.getBoundingClientRect(); openMenu(r.dataset.ctx, +r.dataset.i, b.left - 190, b.bottom + 6); },
-  playhist: el => play(S.history, +el.dataset.i), playliked: () => S.liked.length && play(S.liked, 0),
-  playpl: el => { const p = S.playlists.find(x => x.id === el.dataset.id); if (p && p.tracks.length) play(p.tracks, 0); },
-  playall: el => { const l = ctxList(el.dataset.id); if (l.length) play(l, 0); },
-  shufflepl: el => { const l = ctxList(el.dataset.id); if (!l.length) return; R.shuffle = true; $$('[data-act=shuffle]').forEach(b => b.classList.add('on')); play(l, Math.floor(Math.random() * l.length)); },
+  playhist: el => play(S.history, +el.dataset.i, 'history'), playliked: () => S.liked.length && play(S.liked, 0, 'liked'),
+  playpl: el => { const p = S.playlists.find(x => x.id === el.dataset.id); if (p && p.tracks.length) play(p.tracks, 0, p.id); },
+  playall: el => { const l = ctxList(el.dataset.id); if (l.length) play(l, 0, el.dataset.id); },
+  shufflepl: el => { const l = ctxList(el.dataset.id); if (!l.length) return; R.shuffle = true; $$('[data-act=shuffle]').forEach(b => b.classList.add('on')); play(l, Math.floor(Math.random() * l.length), el.dataset.id); },
+  smartshuffle: () => {
+    const q = smartQueue();
+    if (!q.length) return toast('Add songs to a playlist first');
+    R.shuffle = false;
+    $$('[data-act=shuffle]').forEach(b => b.classList.remove('on'));
+    play(q, 0, 'library');
+    R.playCtx = 'Smart shuffle';
+    toast(`Smart shuffle · ${plural(q.length, 'song')} balanced across your playlists`);
+  },
+  remix: remixModal,
+  'remix-go': () => {
+    const name = ($('#remix-name')?.value || '').trim() || 'Remix';
+    const size = +($('#remix-size')?.value || 40);
+    const liked = !!($('#remix-liked')?.checked);
+    const tracks = remixQueue(size, liked);
+    if (!tracks.length) return toast('There are no songs to remix yet');
+    const pl = { id: rid(), name, cover: { emoji: '🎛️', tone: 'violet' }, tracks, createdAt: Date.now() };
+    S.playlists.push(pl); save(); closeModal(true); drawSide(); nav('playlist/' + pl.id);
+    toast(`“${name}” created · ${plural(tracks.length, 'song')}`);
+  },
+  'pl-sort': el => { S.settings.plSort = el.dataset.k; save(); refreshView(); },
+  'pl-view': el => { S.settings.plView = el.dataset.k; save(); refreshView(); },
+  'recap-year': el => nav('recap/' + el.dataset.y),
+  'recap-range': () => {
+    const from = ($('#recap-from') || {}).value || '';
+    const to = ($('#recap-to') || {}).value || '';
+    if (!from || !to) return toast('Choose both dates');
+    if (from > to) return toast('The start date must come before the end date');
+    nav(`recap/${from}~${to}`);
+  },
+  'block-artist': () => {
+    const input = $('#block-artist'); const name = (input?.value || '').trim();
+    if (!name) return toast('Enter an artist name');
+    if (!(S.settings.blockedArtists || []).some(a => normArtist(a) === normArtist(name))) {
+      S.settings.blockedArtists = [...(S.settings.blockedArtists || []), name].slice(0, 200);
+      save(); toast(`Blocked ${name}`);
+    }
+    if (input) input.value = '';
+    if (curRoute === 'settings') draw();
+  },
+  'unblock-artist': el => {
+    const name = el.dataset.a;
+    S.settings.blockedArtists = (S.settings.blockedArtists || []).filter(a => a !== name);
+    save(); if (curRoute === 'settings') draw();
+  },
   'local-pick': pickLocalFiles,
   'local-scan': async () => { R.localReady = false; await localLoad(true); toast('Local files refreshed'); },
   dlall: async el => {
@@ -2234,7 +2883,7 @@ const acts = {
   'search-clear': () => { const q = $('#q'); if (q) { q.value = ''; updateSearchClear(); q.focus(); } if (curRoute === 'search') nav('search'); },
   'search-recent': el => goSearch(el.dataset.q || ''),
   'search-clear-recent': () => { try { localStorage.removeItem(RECENT_SEARCH_KEY); } catch {} if (curRoute === 'search' && !curArg) draw(); toast('Recent searches cleared'); },
-  playsearch: el => { if (R.results.length) play(R.results, +el.dataset.i || 0); },
+  playsearch: el => { if (R.results.length) play(R.results, +el.dataset.i || 0, 'search'); },
   'top-like': el => {
     const t = R.results[0]; if (!t) return;
     toggleLike(t);
@@ -2278,6 +2927,54 @@ const acts = {
     try { R.sync = await api('/api/sync/push', { method: 'POST' }); syncPaint(); toast('Library sent to host'); }
     catch (e) { toast(e.message); await syncLoad(true); }
   },
+  'sync-merge': async () => {
+    if (mergeBusy) return;
+    mergeBusy = true;
+    try {
+      let p = null;
+      try { p = await api('/api/sync/merge/preview', { method: 'POST' }); } catch {}
+      if (!p || !p.add || !p.removed) {
+        await applyMerge(null);
+        return;
+      }
+      const addN = (p.add.playlists || []).length + (p.add.songs || []).length + (p.add.liked || []).length;
+      const rn = (p.removed.playlists || []).length + (p.removed.songs || []).length + (p.removed.liked || []).length;
+      if (!rn) {
+        if (!addN && !p.add.history) { toast('Both libraries already match'); return; }
+        await applyMerge(p.selected);
+        return;
+      }
+      mergePreview = p;
+      mergeModal(p);
+    } finally { mergeBusy = false; }
+  },
+  'merge-all': () => document.querySelectorAll('#modal [data-mk]').forEach(el => { el.checked = true; }),
+  'merge-none': () => document.querySelectorAll('#modal [data-mk]').forEach(el => { el.checked = false; }),
+  'merge-apply': async () => {
+    const p = mergePreview;
+    if (!p) { closeModal(true); return; }
+    const selected = {
+      playlists: [...((p.selected && p.selected.playlists) || [])],
+      songs: ((p.selected && p.selected.songs) || []).map(x => [x[0], x[1]]),
+      liked: [...((p.selected && p.selected.liked) || [])],
+    };
+    document.querySelectorAll('#modal [data-mk]').forEach(el => {
+      if (!el.checked) return;
+      const i = +el.dataset.mi;
+      if (el.dataset.mk === 'p') {
+        const x = (p.removed.playlists || [])[i];
+        if (x) selected.playlists.push(x.key);
+      } else if (el.dataset.mk === 's') {
+        const x = (p.removed.songs || [])[i];
+        if (x) selected.songs.push([x.pkey, x.key]);
+      } else {
+        const x = (p.removed.liked || [])[i];
+        if (x) selected.liked.push(x.key);
+      }
+    });
+    closeModal(true);
+    await applyMerge(selected);
+  },
   'sync-disconnect': async () => {
     if (!confirm('Disconnect this device? The local library stays here.')) return;
     try { R.sync = await api('/api/sync/disconnect', { method: 'POST' }); syncPaint(); toast('Device sync disconnected'); }
@@ -2304,7 +3001,7 @@ const acts = {
     const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/png,image/jpeg,image/webp,image/gif';
     i.onchange = () => i.files[0] && uploadImportCover(i.files[0]); i.click();
   },
-  'add-to': el => { const p = S.playlists.find(x => x.id === el.dataset.id), t = R.addT; closeModal(true); if (p.tracks.some(x => uid(x) === uid(t))) return toast('Already in ' + p.name); p.tracks.push({ ...t }); save(); drawSide(); toast('Added to ' + p.name); refreshView(); },
+  'add-to': el => { const p = S.playlists.find(x => x.id === el.dataset.id), t = R.addT; closeModal(true); if (p.tracks.some(x => uid(x) === uid(t))) return toast('Already in ' + p.name); p.tracks.push({ ...t, addedAt: Date.now() }); save(); drawSide(); toast('Added to ' + p.name); refreshView(); },
   'add-new': () => { const t = R.addT; closeModal(true); plModal(null, t); },
   genre: el => nav('search/' + encodeURIComponent(el.dataset.g + ' music')),
   'copy-uri': () => navigator.clipboard.writeText((R.health || {}).redirectUri || '').then(() => toast('Copied')),
@@ -2335,6 +3032,14 @@ const acts = {
     if (k === 'contrast') applyReading();
     if (k === 'resume' && !S.settings.resume) clearSession();
     if (k === 'gapless') { if (S.settings.gapless) schedulePrepare(500); else cancelPrepared(); }
+    if (k === 'smartVolume') {
+      if (S.settings.smartVolume) ensureGraph();
+      if (!S.settings.smartVolume && normGain && actx) { R.normGain = 1; normGain.gain.setValueAtTime(1, actx.currentTime); }
+      if (S.settings.smartVolume && NATIVE) toast('Smart volume is desktop/browser only for now');
+    }
+    if (k === 'skipCredits') { if (S.settings.skipCredits) creditsFor(R.cur); else { R.credits = null; R.creditDone = ''; } }
+    if (k === 'headphonesPause') syncNativePrefs();
+    if (k === 'noAi') { refreshView(); toast(S.settings.noAi ? 'No AI filter on · keyword based' : 'No AI filter off'); }
   },
   'save-dir': async () => { try { await api('/api/config', { method: 'PUT', json: { downloadDir: $('#dl-dir').value } }); await refreshHealth(); toast('Folder saved'); } catch (e) { toast(e.message); } },
 };
@@ -2348,7 +3053,7 @@ document.addEventListener('click', e => {
   const sc = t.closest('[data-scroll]'); if (sc) return acts['data-scroll'](sc);
   const g = t.closest('[data-go]'); if (g) return nav(g.dataset.go);
   const q = t.closest('[data-qi]'); if (q) return playIdx(+q.dataset.qi);
-  const r = t.closest('.row'); if (r) return play(ctxList(r.dataset.ctx), +r.dataset.i);
+  const r = t.closest('.row'); if (r) return play(ctxList(r.dataset.ctx), +r.dataset.i, r.dataset.ctx);
 });
 document.addEventListener('contextmenu', e => {
   const r = e.target.closest('.row'); if (!r) return;
@@ -2521,17 +3226,25 @@ document.addEventListener('keydown', e => {
   else if (e.key === '?') { e.preventDefault(); showShortcuts(); }
 });
 addEventListener('hashchange', route);
-document.addEventListener('visibilitychange', () => { if (document.hidden) api('/api/state', { method: 'PUT', json: S }).catch(() => {}); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); }
+  else if (R.playing) startListening();
+});
+addEventListener('pagehide', () => { flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); });
 
 /* ═════════ boot ═════════ */
 (async function boot() {
   $$('[data-ic]').forEach(e => e.innerHTML = I[e.dataset.ic]); buildDm();
   try { const st = await api('/api/state'); if (st) S = { ...DEF, ...st, settings: { ...DEF.settings, ...st.settings } }; } catch {}
+  if (!S.listening || typeof S.listening !== 'object' || !S.listening.devices || typeof S.listening.devices !== 'object') S.listening = { v: 1, devices: {} };
+  if (!Array.isArray(S.settings.blockedArtists)) S.settings.blockedArtists = [];
+  if (!SORT_KEYS.some(([k]) => k === S.settings.plSort)) S.settings.plSort = 'added';
+  if (!['list', 'grid'].includes(S.settings.plView)) S.settings.plView = 'list';
   if (S.settings.theme === 'nothing') S.settings.theme = 'dark';
   if (!THEME_GROUPS.some(g => g.items.some(([k]) => k === S.settings.theme))) S.settings.theme = 'dark';
   if (!STYLES.includes(S.settings.style)) S.settings.style = 'nothing';
   if (!['best', 'saver'].includes(S.settings.streamQuality)) S.settings.streamQuality = 'best';
   if (!NATIVE && !/Electron/.test(navigator.userAgent) && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['127.0.0.1', 'localhost'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
-  applyTheme(); applyMotion(); applyReading(); applyVol(); drawSide(); renderQueue(); updateTransport(); syncSleep(); vizSync(); updateSearchClear();
+  applyTheme(); applyMotion(); applyReading(); applyVol(); drawSide(); renderQueue(); updateTransport(); syncSleep(); vizSync(); updateSearchClear(); syncNativePrefs(); watchAudioOutputs();
   await refreshHealth(); await route(); restoreSession(); localLoad(); syncLoad(); syncPoll();
 })();

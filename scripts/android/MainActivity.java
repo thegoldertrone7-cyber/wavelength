@@ -44,6 +44,7 @@ import org.schabi.newpipe.extractor.search.SearchInfo;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
+import org.schabi.newpipe.extractor.stream.StreamSegment;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -57,6 +58,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -93,12 +95,21 @@ public class MainActivity extends AppCompatActivity {
     private static final Pattern BAD_TITLE = Pattern.compile(
         "(?i)\\b(live|cover|remix|karaoke|reaction|instrumental|sped up|slowed|nightcore|8d|tutorial|lesson|mashup)\\b");
 
+    /* Best-effort mirror of the browser's No AI filter. YouTube metadata has no
+       reliable AI flag, so this is intentionally limited to obvious keywords. */
+    private static final Pattern AI_TEXT = Pattern.compile(
+        "(?i)(\\bA\\.?I\\.?\\b|artificial intelligence"
+            + "|\\bai[- ]?(generated|powered|cover|version|vocals?|music|song|artist|remix)\\b"
+            + "|\\bsuno\\b|\\budio\\b|\\brvc\\b|deepfake|voice ?clone"
+            + "|neural (network|vocals?)|\\bllm\\b|chatgpt)");
+
     private WebView wv;
     private WebViewAssetLoader assetLoader;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newFixedThreadPool(4);
     private final Map<String, CacheEntry> searchCache = new ConcurrentHashMap<>();
     private final Map<String, CacheEntry> streamCache = new ConcurrentHashMap<>();
+    private final Map<String, CacheEntry> infoCache = new ConcurrentHashMap<>();
     private SharedPreferences prefs;
     private File stateFile;
     private boolean pageReady = false;
@@ -305,6 +316,11 @@ public class MainActivity extends AppCompatActivity {
             null));
     }
 
+    static boolean canReceiveCommands() {
+        MainActivity a = current;
+        return a != null && a.wv != null;
+    }
+
     /* ── bridge ─────────────────────────────────────────────────────── */
 
     class Bridge {
@@ -343,6 +359,12 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void setPlaybackState(boolean playing, double position, double duration) {
             PlaybackService.pushState(MainActivity.this, playing, position, duration);
+        }
+
+        @JavascriptInterface
+        public void setHeadphonesPause(boolean on) {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("headphones_pause", on).apply();
         }
 
         @JavascriptInterface
@@ -399,10 +421,14 @@ public class MainActivity extends AppCompatActivity {
             }
             return readState();
         }
-        if ("/api/search".equals(p)) return search(u.getQueryParameter("q"));
+        if ("/api/search".equals(p)) return noAiFilter(search(u.getQueryParameter("q")), noAi(u));
         if ("/api/match".equals(p)) return match(new JSONObject(body == null || body.isEmpty() ? "{}" : body));
-        if (p.startsWith("/api/related/")) return related(p.substring("/api/related/".length()));
-
+        if (p.startsWith("/api/related/")) {
+            return noAiFilter(related(p.substring("/api/related/".length())), noAi(u));
+        }
+        if (p.startsWith("/api/info/")) {
+            return info(p.substring("/api/info/".length()));
+        }
         if (p.startsWith("/api/stream/")) {
             String id = p.substring("/api/stream/".length());
             return stream(id, u.getQueryParameter("q"));
@@ -436,6 +462,8 @@ public class MainActivity extends AppCompatActivity {
         if ("/api/sync/join".equals(p)) return syncJoin(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
         if ("/api/sync/pull".equals(p)) return syncPull().toString();
         if ("/api/sync/push".equals(p)) return syncPush().toString();
+        if ("/api/sync/merge/preview".equals(p)) return syncMergePreview().toString();
+        if ("/api/sync/merge".equals(p)) return syncMerge(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
         if ("/api/sync/disconnect".equals(p)) return syncDisconnect().toString();
         if ("/api/sync/host".equals(p)) {
             throw new Exception("Host from the computer, then join it here. Phone hosting is not enabled yet.");
@@ -619,6 +647,33 @@ public class MainActivity extends AppCompatActivity {
         return value;
     }
 
+    private static boolean noAi(Uri u) {
+        String v = u == null ? null : u.getQueryParameter("noAi");
+        return v != null && ("1".equals(v) || "true".equalsIgnoreCase(v) || "yes".equalsIgnoreCase(v));
+    }
+
+    private static boolean looksAI(JSONObject t) {
+        if (t == null) return false;
+        String text = t.optString("title", "") + " " + t.optString("artist", "")
+            + " " + t.optString("album", "");
+        return AI_TEXT.matcher(text).find();
+    }
+
+    /* Filter after the cache so one cached search can serve both modes. */
+    private static String noAiFilter(String json, boolean on) {
+        if (!on || json == null) return json;
+        try {
+            JSONArray in = new JSONArray(json), out = new JSONArray();
+            for (int i = 0; i < in.length(); i++) {
+                JSONObject t = in.optJSONObject(i);
+                if (t != null && !looksAI(t)) out.put(t);
+            }
+            return out.toString();
+        } catch (Exception e) {
+            return json;
+        }
+    }
+
     private String match(JSONObject in) throws Exception {
         String title = in.optString("title", "");
         String artist = in.optString("artist", "");
@@ -669,6 +724,34 @@ public class MainActivity extends AppCompatActivity {
 
     private String stream(String id, String q) throws Exception {
         return new JSONObject().put("url", resolveAudio(id, q)).toString();
+    }
+
+    /* Chapter/segment titles power the credits-skip toggle. Only metadata is
+       returned; playback still happens in the WebView. */
+    private String info(String raw) throws Exception {
+        String id = cleanId(raw);
+        CacheEntry hit = infoCache.get(id);
+        if (hit != null && hit.fresh(60 * 60 * 1000)) return hit.value;
+
+        ensureNewPipe();
+        StreamInfo si = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=" + id);
+        JSONArray chapters = new JSONArray();
+        List<StreamSegment> segments = si.getStreamSegments();
+        if (segments != null) {
+            for (StreamSegment s : segments) {
+                if (s == null) continue;
+                chapters.put(new JSONObject()
+                    .put("title", s.getTitle() == null ? "" : s.getTitle())
+                    .put("start", Math.max(0, s.getStartTimeSeconds())));
+                if (chapters.length() >= 100) break;
+            }
+        }
+        String value = new JSONObject()
+            .put("duration", Math.max(0, si.getDuration()))
+            .put("chapters", chapters)
+            .toString();
+        infoCache.put(id, new CacheEntry(value));
+        return value;
     }
 
     private String resolveAudio(String id, String quality) throws Exception {
@@ -754,6 +837,8 @@ public class MainActivity extends AppCompatActivity {
         JSONArray playlists = state.optJSONArray("playlists");
         JSONArray liked = state.optJSONArray("liked");
         JSONArray history = state.optJSONArray("history");
+        JSONObject listening = state.optJSONObject("listening");
+        JSONObject listeningDevices = listening == null ? null : listening.optJSONObject("devices");
         int tracks = 0;
         if (playlists != null) {
             for (int i = 0; i < playlists.length(); i++) {
@@ -766,7 +851,8 @@ public class MainActivity extends AppCompatActivity {
             .put("playlists", playlists == null ? 0 : playlists.length())
             .put("tracks", tracks)
             .put("liked", liked == null ? 0 : liked.length())
-            .put("history", history == null ? 0 : history.length());
+            .put("history", history == null ? 0 : history.length())
+            .put("devices", listeningDevices == null ? 0 : listeningDevices.length());
         return new JSONObject()
             .put("role", connected ? "guest" : "off")
             .put("enabled", connected)
@@ -787,10 +873,26 @@ public class MainActivity extends AppCompatActivity {
         String code = syncCode(input.optString("code", ""));
         if (code.length() < 6) throw new Exception("Enter the pairing code shown on the computer");
         JSONObject info = syncFetch(base, code, "GET", "/api/sync/info", null);
-        JSONObject remote = syncFetch(base, code, "GET", "/api/sync/library", null);
-        JSONObject lib = remote.optJSONObject("library");
-        if (lib == null) throw new Exception("The host did not send a library");
-        applyLibrary(lib);
+        JSONObject remote;
+        if (info.optBoolean("merge", false)) {
+            JSONObject payload = mergePayload();
+            try {
+                JSONObject preview = syncFetch(base, code, "PUT", "/api/sync/preview", payload.toString());
+                JSONObject selected = preview.optJSONObject("selected");
+                if (selected != null) payload.put("selected", selected);
+            } catch (Exception ignored) {
+                /* Older hosts merge everything; keep the join working. */
+            }
+            remote = syncFetch(base, code, "PUT", "/api/sync/library?mode=merge", payload.toString());
+            JSONObject merged = remote.optJSONObject("library");
+            if (merged == null) throw new Exception("The host did not send the merged library");
+            applyMergedLibrary(merged);
+        } else {
+            remote = syncFetch(base, code, "GET", "/api/sync/library", null);
+            JSONObject lib = remote.optJSONObject("library");
+            if (lib == null) throw new Exception("The host did not send a library");
+            applyLibrary(lib);
+        }
         prefs.edit()
             .putString(KEY_SYNC_URL, base)
             .putString(KEY_SYNC_CODE, code)
@@ -799,6 +901,46 @@ public class MainActivity extends AppCompatActivity {
             .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
             .apply();
         return syncStatus();
+    }
+
+    private JSONObject syncMergePreview() throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
+        JSONObject preview = syncFetch(base, code, "PUT", "/api/sync/preview", mergePayload().toString());
+        if (!preview.has("role")) preview.put("role", "guest");
+        return preview;
+    }
+
+    private JSONObject syncMerge(JSONObject input) throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
+        JSONObject payload = mergePayload();
+        if (input.optJSONObject("selected") != null) payload.put("selected", input.optJSONObject("selected"));
+        JSONObject remote = syncFetch(base, code, "PUT", "/api/sync/library?mode=merge", payload.toString());
+        JSONObject merged = remote.optJSONObject("library");
+        if (merged == null) throw new Exception("The host did not send the merged library. Update the computer, then try again.");
+        applyMergedLibrary(merged);
+        prefs.edit()
+            .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
+            .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
+            .apply();
+        return syncStatus();
+    }
+
+    private JSONObject mergePayload() throws Exception {
+        JSONObject state = new JSONObject(readState());
+        JSONObject lib = new JSONObject()
+            .put("playlists", state.optJSONArray("playlists") == null ? new JSONArray() : state.optJSONArray("playlists"))
+            .put("liked", state.optJSONArray("liked") == null ? new JSONArray() : state.optJSONArray("liked"))
+            .put("history", state.optJSONArray("history") == null ? new JSONArray() : state.optJSONArray("history"))
+            .put("listening", state.optJSONObject("listening") == null
+                ? new JSONObject().put("v", 1).put("devices", new JSONObject())
+                : state.optJSONObject("listening"));
+        return new JSONObject()
+            .put("library", lib)
+            .put("device", Build.MODEL == null ? "Android" : Build.MODEL);
     }
 
     private JSONObject syncPull() throws Exception {
@@ -820,13 +962,7 @@ public class MainActivity extends AppCompatActivity {
         String base = prefs.getString(KEY_SYNC_URL, "");
         String code = prefs.getString(KEY_SYNC_CODE, "");
         if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
-        JSONObject state = new JSONObject(readState());
-        JSONObject lib = new JSONObject()
-            .put("playlists", state.optJSONArray("playlists") == null ? new JSONArray() : state.optJSONArray("playlists"))
-            .put("liked", state.optJSONArray("liked") == null ? new JSONArray() : state.optJSONArray("liked"))
-            .put("history", state.optJSONArray("history") == null ? new JSONArray() : state.optJSONArray("history"));
-        JSONObject payload = new JSONObject().put("library", lib);
-        JSONObject remote = syncFetch(base, code, "PUT", "/api/sync/library", payload.toString());
+        JSONObject remote = syncFetch(base, code, "PUT", "/api/sync/library", mergePayload().toString());
         prefs.edit()
             .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
             .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
@@ -850,7 +986,116 @@ public class MainActivity extends AppCompatActivity {
         if (lib.has("playlists")) state.put("playlists", lib.optJSONArray("playlists"));
         if (lib.has("liked")) state.put("liked", lib.optJSONArray("liked"));
         if (lib.has("history")) state.put("history", lib.optJSONArray("history"));
+        if (lib.has("listening")) {
+            state.put("listening", mergeListening(state.optJSONObject("listening"), lib.optJSONObject("listening")));
+        }
         writeState(state.toString());
+    }
+
+    /* Merge is additive. The host's answer already excludes items the user did
+       not confirm, but this device's own copy must never lose anything. Only
+       Pull replaces the local library. */
+    private void applyMergedLibrary(JSONObject incoming) throws Exception {
+        JSONObject state = new JSONObject(readState());
+        JSONObject local = new JSONObject()
+            .put("playlists", state.optJSONArray("playlists") == null ? new JSONArray() : state.optJSONArray("playlists"))
+            .put("liked", state.optJSONArray("liked") == null ? new JSONArray() : state.optJSONArray("liked"))
+            .put("history", state.optJSONArray("history") == null ? new JSONArray() : state.optJSONArray("history"));
+        state.put("playlists", unionPlaylists(local.optJSONArray("playlists"), incoming.optJSONArray("playlists")));
+        state.put("liked", unionTracks(local.optJSONArray("liked"), incoming.optJSONArray("liked")));
+        state.put("history", unionTracks(local.optJSONArray("history"), incoming.optJSONArray("history")));
+        if (incoming.optJSONObject("listening") != null) {
+            state.put("listening", mergeListening(state.optJSONObject("listening"), incoming.optJSONObject("listening")));
+        }
+        writeState(state.toString());
+    }
+
+    private static String trackKey(JSONObject t) {
+        if (t == null) return "";
+        String v = t.optString("localId", "");
+        if (!v.isEmpty()) return "local:" + v;
+        v = t.optString("spId", "");
+        if (!v.isEmpty()) return "sp:" + v;
+        v = t.optString("ytId", "");
+        if (!v.isEmpty()) return "yt:" + v;
+        String title = t.optString("title", "").trim().toLowerCase(Locale.ROOT);
+        return title.isEmpty() ? "" : "x:" + title + "|" + t.optString("artist", "").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String playlistKey(JSONObject p) {
+        if (p == null) return "";
+        String v = p.optString("spId", "");
+        if (!v.isEmpty()) return "sp:" + v;
+        v = p.optString("id", "");
+        if (!v.isEmpty()) return "id:" + v;
+        return "name:" + p.optString("name", "").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static JSONArray unionTracks(JSONArray first, JSONArray second) throws Exception {
+        JSONArray out = new JSONArray();
+        Map<String, Integer> seen = new LinkedHashMap<>();
+        JSONArray[] sides = { first == null ? new JSONArray() : first, second == null ? new JSONArray() : second };
+        for (JSONArray src : sides) {
+            for (int i = 0; i < src.length(); i++) {
+                JSONObject t = src.optJSONObject(i);
+                if (t == null) continue;
+                String key = trackKey(t);
+                if (key.isEmpty()) { out.put(t); continue; }
+                if (!seen.containsKey(key)) { seen.put(key, out.length()); out.put(t); }
+            }
+        }
+        return out;
+    }
+
+    private static JSONArray unionPlaylists(JSONArray first, JSONArray second) throws Exception {
+        JSONArray out = new JSONArray();
+        Map<String, JSONObject> seen = new LinkedHashMap<>();
+        JSONArray[] sides = { first == null ? new JSONArray() : first, second == null ? new JSONArray() : second };
+        for (JSONArray src : sides) {
+            for (int i = 0; i < src.length(); i++) {
+                JSONObject p = src.optJSONObject(i);
+                if (p == null) continue;
+                String key = playlistKey(p);
+                JSONObject have = seen.get(key);
+                if (have == null) {
+                    JSONObject copy = new JSONObject(p.toString());
+                    if (copy.optJSONArray("tracks") == null) copy.put("tracks", new JSONArray());
+                    seen.put(key, copy);
+                    out.put(copy);
+                } else {
+                    have.put("tracks", unionTracks(have.optJSONArray("tracks"), p.optJSONArray("tracks")));
+                    if (have.optString("name", "").isEmpty() && !p.optString("name", "").isEmpty()) have.put("name", p.optString("name"));
+                    if (have.optString("cover", "").isEmpty() && !p.optString("cover", "").isEmpty()) have.put("cover", p.opt("cover"));
+                    if (have.optString("description", "").isEmpty() && !p.optString("description", "").isEmpty()) have.put("description", p.optString("description"));
+                }
+            }
+        }
+        return out;
+    }
+
+    /* Listening stats belong to individual devices. Keep the newest snapshot
+       for each device id instead of summing counters from every sync. */
+    private static JSONObject mergeListening(JSONObject local, JSONObject incoming) throws Exception {
+        JSONObject devices = new JSONObject();
+        mergeDevices(devices, local == null ? null : local.optJSONObject("devices"));
+        mergeDevices(devices, incoming == null ? null : incoming.optJSONObject("devices"));
+        return new JSONObject().put("v", 1).put("devices", devices);
+    }
+
+    private static void mergeDevices(JSONObject out, JSONObject src) {
+        if (src == null) return;
+        Iterator<String> keys = src.keys();
+        while (keys.hasNext()) {
+            String id = keys.next();
+            JSONObject device = src.optJSONObject(id);
+            if (device == null) continue;
+            JSONObject have = out.optJSONObject(id);
+            long at = device.optLong("updatedAt", 0);
+            long old = have == null ? -1 : have.optLong("updatedAt", 0);
+            if (have == null || at >= old) {
+                try { out.put(id, device); } catch (Exception ignored) {}
+            }
+        }
     }
 
     private static String syncBase(String raw) throws Exception {

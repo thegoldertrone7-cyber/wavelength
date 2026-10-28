@@ -159,16 +159,22 @@ player never jumps height because of a long title or artist name.
 ## Features the design supports
 
 - Search YouTube and play ad-free.
-- Playlists, liked songs, listening history and a reorderable queue.
-- Shuffle, repeat all, repeat one and endless related-song playback.
+- Playlists, liked songs, listening history and a queue with play next, add, remove and clear.
+- Shuffle that stays inside the active list, plus Smart Shuffle and Remix across playlists.
+- Playlist sorting by recently added, A-Z, artist, duration or album, with list and grid views.
 - Full-screen player, queue, volume, seeking and sleep timer.
+- Smart volume that evens out quiet and loud tracks on desktop/browser.
+- No AI and blocked-artist filtering, labelled as best effort.
+- Metadata-based credits/outro skipping, labelled as best effort.
 - Spotify playlist/album/song links, pasted song lists and optional account import (desktop).
 - MP3 downloads with selectable quality (desktop).
 - Local lossless files at native bit depth and sample rate (desktop).
-- Device sync for playlists, liked songs and history; settings and downloads stay local.
+- Device sync for playlists, liked songs, history and listening stats, with additive Merge data and
+  a checklist for items removed here but still on another copy; settings and downloads stay local.
+- Listening recap with year presets and custom start/end dates.
 - 14 palettes, custom accents, 8 interface styles, text-size and contrast controls.
 - Reduced motion, keyboard shortcuts, focus-visible rings and touch-sized controls.
-- Android lock-screen, notification, Bluetooth and headset controls.
+- Android lock-screen, notification, Bluetooth, headset and home-screen widget controls.
 - Standalone Android playback through NewPipeExtractor, with optional computer sync.
 
 ## Android character

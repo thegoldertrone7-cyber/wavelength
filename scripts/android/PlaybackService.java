@@ -5,11 +5,14 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -62,6 +65,36 @@ public class PlaybackService extends Service {
     private boolean playing = false;
     private long position = 0;
     private long duration = 0;
+
+    private String widgetTitle = "";
+    private String widgetArtist = "";
+    private boolean widgetPlaying = false;
+    private boolean noisyRegistered = false;
+
+    /* Android tells us when the active audio route disappears (Bluetooth
+       headset off, headphones unplugged). Pause instead of blasting the phone
+       speaker. The web UI exposes the same preference; MainActivity mirrors it
+       into these prefs. */
+    private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) return;
+            if (!playing) return;
+            boolean pause = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
+                .getBoolean("headphones_pause", true);
+            if (pause) send("pause", 0);
+        }
+    };
+
+    static boolean sendCommand(Context context, String command) {
+        PlaybackService svc = instance;
+        if (svc == null || command == null) return false;
+        // Without a live page there is nothing to control; the widget opens the
+        // app instead of silently starting an empty service.
+        if (!MainActivity.canReceiveCommands()) return false;
+        svc.send(command, 0);
+        return true;
+    }
 
     static void pushMetadata(Context context, String json) {
         if (instance != null) {
@@ -128,6 +161,10 @@ public class PlaybackService extends Service {
             @Override public void onSeekTo(long pos) { send("seek", pos); }
         });
         session.setActive(true);
+        try {
+            registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+            noisyRegistered = true;
+        } catch (Exception ignored) {}
     }
 
     @Override
@@ -159,6 +196,10 @@ public class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         if (instance == this) instance = null;
+        if (noisyRegistered) {
+            try { unregisterReceiver(noisyReceiver); } catch (Exception ignored) {}
+            noisyRegistered = false;
+        }
         if (session != null) {
             session.setActive(false);
             session.release();
@@ -197,6 +238,7 @@ public class PlaybackService extends Service {
             }
             applyMetadata();
             updateNotification();
+            publishWidget();
         } catch (Exception ignored) {}
     }
 
@@ -222,6 +264,17 @@ public class PlaybackService extends Service {
             session.setActive(true);
         }
         updateNotification();
+        publishWidget();
+    }
+
+    /* The widget only shows title, artist and play state, so avoid redraws on
+       every one-second position update. */
+    private void publishWidget() {
+        if (title.equals(widgetTitle) && artist.equals(widgetArtist) && playing == widgetPlaying) return;
+        widgetTitle = title;
+        widgetArtist = artist;
+        widgetPlaying = playing;
+        WavelengthWidget.publish(this, title, artist, playing);
     }
 
     private void applyMetadata() {
@@ -343,6 +396,10 @@ public class PlaybackService extends Service {
 
     private void shutdown() {
         playing = false;
+        widgetTitle = "";
+        widgetArtist = "";
+        widgetPlaying = false;
+        WavelengthWidget.clear(this);
         if (session != null) {
             session.setActive(false);
         }

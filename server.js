@@ -201,6 +201,11 @@ async function search(q) {
 }
 
 const BAD = /\b(live|cover|remix|karaoke|reaction|instrumental|sped up|slowed|nightcore|8d|tutorial|lesson|mashup)\b/i;
+/* Best-effort text filter, mirroring the client. It is deliberately
+   conservative: YouTube metadata has no reliable "AI generated" flag. */
+const AI_RE = /(?:\bA\.?I\.?\b|artificial intelligence|\bai[- ]?(?:generated|powered|cover|version|vocals?|music|song|artist|remix)\b|\b(?:generated|made) (?:by|with) ai\b|\bsuno\b|\budio\b|\brvc\b|deepfake|voice ?clone|neural (?:network|vocals?)|\bllm\b|chatgpt)/i;
+const looksAI = t => !!t && AI_RE.test([t.title, t.artist, t.album].filter(Boolean).join(' '));
+const noAiFilter = (list, on) => on ? list.filter(t => !looksAI(t)) : list;
 async function match(title,artist,dur) {
   const out = await limited(()=>ytdlp(['--flat-playlist','-j','--no-warnings',`ytsearch6:${[artist,title].filter(Boolean).join(' - ')}`]));
   const want=`${title} ${artist}`.toLowerCase(), core=title.toLowerCase().replace(/\s*[(\[].*$/,'');
@@ -223,6 +228,28 @@ async function match(title,artist,dur) {
 async function related(id) {
   const out = await limited(()=>ytdlp(['--flat-playlist','-j','--no-warnings','--playlist-end','15',`https://www.youtube.com/watch?v=${id}&list=RD${id}`]));
   return lines(out).filter(j=>j.id&&j.id!==id&&j.duration).map(toTrack);
+}
+
+/* Chapter/segment metadata for credits skipping. Cached because a track can
+   start repeatedly and yt-dlp is expensive. */
+const INFO_TTL = 60 * 60 * 1000, INFO_MAX = 200;
+const infoCache = new Map();
+async function videoInfo(id) {
+  const hit = infoCache.get(id);
+  if (hit && Date.now() - hit.at < INFO_TTL) return hit.value;
+  const out = await limited(() => ytdlp(['-j', '--no-warnings', '--no-playlist', `https://www.youtube.com/watch?v=${id}`], { timeout: 30000 }));
+  const j = lines(out)[0] || {};
+  const value = {
+    duration: Math.round(+j.duration || 0),
+    chapters: Array.isArray(j.chapters) ? j.chapters.slice(0, 100).map(c => ({
+      title: String(c.title || '').slice(0, 200),
+      start: Math.round(+c.start_time || 0),
+      end: Math.round(+c.end_time || 0),
+    })) : [],
+  };
+  infoCache.set(id, { at: Date.now(), value });
+  while (infoCache.size > INFO_MAX) infoCache.delete(infoCache.keys().next().value);
+  return value;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -1399,23 +1426,307 @@ const SYNC_HEADER = 'x-wavelength-sync';
 const syncDefaults = { role: 'off', enabled: false, code: '', hostUrl: '', rev: 0, lastSync: 0, remoteUpdatedAt: 0, peer: '', port: SYNC_PORT };
 let sync = { ...syncDefaults, ...readJSON('sync.json', {}) };
 let syncServer = null, syncLastError = '';
+/* In-memory copies used by the host's Merge data button. They never leave
+   sync.json, and are cleared when hosting stops. */
+let syncGuestSnaps = new Map(), syncKeepHost = null;
 const syncSave = () => { try { writeJSON('sync.json', sync); } catch (e) { console.error('[sync] could not save settings:', e.message); } };
 const syncCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
 const newSyncCode = () => crypto.randomBytes(4).toString('hex').toUpperCase();
 const syncList = (v, max) => Array.isArray(v) ? v.filter(x => x && typeof x === 'object').slice(0, max) : [];
+const syncNum = v => Math.max(0, Math.min(1e12, Math.round(+v || 0)));
+const syncText = (v, n = 200) => String(v == null ? '' : v).slice(0, n);
+/* Listening stats are owned by one device each, so sync keeps the newest
+   snapshot per device id instead of adding counters together. */
+const cleanPairs = (v, max, keyLen) => {
+  const out = {};
+  const src = v && typeof v === 'object' ? v : {};
+  for (const [k, arr] of Object.entries(src).slice(0, max)) {
+    if (!Array.isArray(arr)) continue;
+    out[syncText(k, keyLen)] = [syncNum(arr[0]), syncNum(arr[1])];
+  }
+  return out;
+};
+function cleanListening(v) {
+  if (!v || typeof v !== 'object' || !v.devices || typeof v.devices !== 'object') return { v: 1, devices: {} };
+  const out = { v: 1, devices: {} };
+  for (const [id, d] of Object.entries(v.devices).slice(0, 40)) {
+    if (!d || typeof d !== 'object') continue;
+    const key = syncText(id, 64).replace(/[^A-Za-z0-9_.:-]/g, '');
+    if (!key) continue;
+    const dev = { name: syncText(d.name, 60) || 'Device', updatedAt: syncNum(d.updatedAt), days: {}, years: {}, daily: {} };
+    for (const [day, sec] of Object.entries(d.days || {}).slice(0, 800)) if (/^\d{4}-\d{2}-\d{2}$/.test(day)) dev.days[day] = syncNum(sec);
+    for (const [day, b] of Object.entries(d.daily || {}).slice(0, 800)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !b || typeof b !== 'object') continue;
+      dev.daily[day] = {
+        t: cleanPairs(b.t, 5000, 80),
+        a: cleanPairs(b.a, 2000, 200),
+        p: cleanPairs(b.p, 500, 200),
+      };
+    }
+    for (const [y, b] of Object.entries(d.years || {}).slice(0, 12)) {
+      if (!/^\d{4}$/.test(y) || !b || typeof b !== 'object') continue;
+      const yb = { seconds: syncNum(b.seconds), tracks: {}, playlists: {}, artists: {} };
+      for (const [k, t] of Object.entries(b.tracks || {}).slice(0, 5000)) {
+        if (!t || typeof t !== 'object') continue;
+        yb.tracks[syncText(k, 80)] = {
+          title: syncText(t.title, 300), artist: syncText(t.artist, 300), art: syncText(t.art, 500),
+          seconds: syncNum(t.seconds), plays: syncNum(t.plays),
+        };
+      }
+      for (const [name, x] of Object.entries(b.playlists || {}).slice(0, 500)) yb.playlists[syncText(name, 200)] = { seconds: syncNum(x && x.seconds), plays: syncNum(x && x.plays) };
+      for (const [name, x] of Object.entries(b.artists || {}).slice(0, 2000)) yb.artists[syncText(name, 200)] = { seconds: syncNum(x && x.seconds), plays: syncNum(x && x.plays) };
+      dev.years[y] = yb;
+    }
+    out.devices[key] = dev;
+  }
+  return out;
+}
+function mergeListening(cur, incoming) {
+  const out = { v: 1, devices: {} };
+  for (const src of [cur, incoming]) {
+    if (!src || typeof src !== 'object' || !src.devices) continue;
+    for (const [id, d] of Object.entries(src.devices)) {
+      if (!d || typeof d !== 'object') continue;
+      const have = out.devices[id];
+      if (!have || syncNum(d.updatedAt) >= syncNum(have.updatedAt)) out.devices[id] = d;
+    }
+  }
+  return out;
+}
+/* Merge is additive: playlists, liked songs, history and per-device listening
+   stats from both copies are kept. It is intentionally not a deletion sync —
+   a track removed on one device comes back if the other copy still has it. */
+const trackKeyOf = t => {
+  if (!t || typeof t !== 'object') return '';
+  if (t.localId) return 'local:' + syncText(t.localId, 80);
+  if (t.spId) return 'sp:' + syncText(t.spId, 80);
+  if (t.ytId) return 'yt:' + syncText(t.ytId, 80);
+  const title = syncText(t.title, 300).trim().toLowerCase();
+  return title ? 'x:' + title + '|' + syncText(t.artist, 300).trim().toLowerCase() : '';
+};
+const playlistKeyOf = p => {
+  if (!p || typeof p !== 'object') return '';
+  if (p.spId) return 'sp:' + syncText(p.spId, 120);
+  if (p.id) return 'id:' + syncText(p.id, 120);
+  return 'name:' + syncText(p.name, 200).trim().toLowerCase();
+};
+const mergeTrack = (have, extra) => {
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (k === 'addedAt') {
+      const a = +have.addedAt || 0, b = +v || 0;
+      if (a && b) have.addedAt = Math.min(a, b);
+      else if (!a && b) have.addedAt = b;
+    } else if (have[k] == null || have[k] === '') have[k] = v;
+  }
+  return have;
+};
+const mergeTrackLists = (left, right, max) => {
+  const out = [], seen = new Map();
+  for (const src of [left, right]) {
+    for (const t of Array.isArray(src) ? src : []) {
+      if (!t || typeof t !== 'object') continue;
+      const key = trackKeyOf(t);
+      if (!key) continue;
+      const have = seen.get(key);
+      if (!have) {
+        const copy = { ...t };
+        seen.set(key, copy);
+        out.push(copy);
+      } else mergeTrack(have, t);
+    }
+  }
+  return out.slice(0, max);
+};
+const emptyLibrary = () => ({ playlists: [], liked: [], history: [], listening: { v: 1, devices: {} } });
+/* A baseline records the last library this device merged. It is used only to
+   tell a genuinely new item (add it automatically) from one this device used
+   to have and has since removed (ask before adding it back). */
+const readMergeBase = () => {
+  const b = readJSON('merge-base.json', null);
+  return b && typeof b === 'object' && b.playlists && typeof b.playlists === 'object' ? b : null;
+};
+const writeMergeBase = lib => {
+  if (!lib) return;
+  const base = { v: 1, updatedAt: Date.now(), playlists: {}, liked: {} };
+  for (const p of lib.playlists || []) {
+    const key = playlistKeyOf(p);
+    if (!key) continue;
+    const tracks = {};
+    for (const t of p.tracks || []) {
+      const tk = trackKeyOf(t);
+      if (tk) tracks[tk] = 1;
+    }
+    base.playlists[key] = { tracks };
+  }
+  for (const t of lib.liked || []) {
+    const tk = trackKeyOf(t);
+    if (tk) base.liked[tk] = 1;
+  }
+  try { writeJSON('merge-base.json', base); } catch (e) { console.error('[sync] could not save merge baseline:', e.message); }
+};
+/* The baseline only grows. An item this device ever knew stays "known", so a
+   later copy offering it back is presented as something removed, not silently
+   treated as new. */
+const rememberMergeBase = lib => {
+  const old = readMergeBase();
+  if (!old) return writeMergeBase(lib);
+  const base = { v: 1, updatedAt: Date.now(), playlists: {}, liked: {} };
+  for (const [key, val] of Object.entries(old.playlists || {})) {
+    const tracks = {};
+    for (const tk of Object.keys((val && val.tracks) || {})) tracks[tk] = 1;
+    base.playlists[key] = { tracks };
+  }
+  for (const tk of Object.keys(old.liked || {})) base.liked[tk] = 1;
+  for (const p of lib.playlists || []) {
+    const key = playlistKeyOf(p);
+    if (!key) continue;
+    if (!base.playlists[key]) base.playlists[key] = { tracks: {} };
+    for (const t of p.tracks || []) {
+      const tk = trackKeyOf(t);
+      if (tk) base.playlists[key].tracks[tk] = 1;
+    }
+  }
+  for (const t of lib.liked || []) {
+    const tk = trackKeyOf(t);
+    if (tk) base.liked[tk] = 1;
+  }
+  try { writeJSON('merge-base.json', base); } catch (e) { console.error('[sync] could not save merge baseline:', e.message); }
+};
+const cleanMergeKeys = (v, max) => [...new Set((Array.isArray(v) ? v : []).filter(x => typeof x === 'string' && x).map(x => x.slice(0, 400)))].slice(0, max);
+const cleanMergeSelection = v => {
+  if (!v || typeof v !== 'object') return null;
+  const songs = [];
+  for (const x of Array.isArray(v.songs) ? v.songs.slice(0, 20000) : []) {
+    let p = '', t = '';
+    if (Array.isArray(x)) { p = String(x[0] || ''); t = String(x[1] || ''); }
+    else if (x && typeof x === 'object') { p = String(x.p || ''); t = String(x.t || x.key || ''); }
+    if (p && t) songs.push([p.slice(0, 400), t.slice(0, 400)]);
+  }
+  return {
+    playlists: new Set(cleanMergeKeys(v.playlists, 2000)),
+    songs: new Set(songs.map(([p, t]) => p + '\u0000' + t)),
+    liked: new Set(cleanMergeKeys(v.liked, 50000)),
+  };
+};
+const trackAllowed = (selection, pkey, tkey, all) => !selection || all || selection.playlists.has(pkey) || selection.songs.has(pkey + '\u0000' + tkey);
+/* Merges one local library with one or more peer copies. Pass selection to
+   add only the keys the user confirmed; omit it for the old full merge. */
+function mergeLibraries(left, rights, selection = null) {
+  const a = left || emptyLibrary();
+  const peers = (Array.isArray(rights) ? rights : [rights]).filter(x => x && typeof x === 'object');
+  const out = { playlists: [], liked: [], history: [], listening: cleanListening(a.listening) };
+  const pls = new Map(), addedPlaylists = new Set();
+  for (const p of a.playlists || []) {
+    const key = playlistKeyOf(p);
+    if (!key) continue;
+    const copy = { ...p, tracks: mergeTrackLists(p.tracks, [], 50000) };
+    pls.set(key, copy);
+    out.playlists.push(copy);
+  }
+  for (const b of peers) out.listening = mergeListening(out.listening, cleanListening(b.listening));
+  for (const b of peers) {
+    for (const p of b.playlists || []) {
+      const key = playlistKeyOf(p);
+      if (!key) continue;
+      let have = pls.get(key);
+      if (!have) {
+        if (selection && !selection.playlists.has(key)) continue;
+        have = { ...p, tracks: mergeTrackLists(p.tracks, [], 50000) };
+        pls.set(key, have);
+        addedPlaylists.add(key);
+        out.playlists.push(have);
+      } else {
+        for (const f of ['name', 'cover', 'description', 'createdAt']) {
+          if ((have[f] == null || have[f] === '') && p[f] != null) have[f] = p[f];
+        }
+        const tracks = (p.tracks || []).filter(t => trackAllowed(selection, key, trackKeyOf(t), addedPlaylists.has(key)));
+        have.tracks = mergeTrackLists(have.tracks, tracks, 50000);
+      }
+    }
+  }
+  out.liked = mergeTrackLists(a.liked, [], 50000);
+  out.history = mergeTrackLists(a.history, [], 50000);
+  for (const b of peers) {
+    out.liked = mergeTrackLists(out.liked, (b.liked || []).filter(t => !selection || selection.liked.has(trackKeyOf(t))), 50000);
+    out.history = mergeTrackLists(out.history, b.history, 50000);
+  }
+  out.playlists = out.playlists.slice(0, 2000);
+  return out;
+}
+function previewMerge(local, sources, baseline) {
+  const src = (Array.isArray(sources) ? sources : [sources]).filter(x => x && typeof x === 'object');
+  const localPls = new Map();
+  for (const p of local.playlists || []) {
+    const key = playlistKeyOf(p);
+    if (key) localPls.set(key, p);
+  }
+  const localLiked = new Set((local.liked || []).map(trackKeyOf).filter(Boolean));
+  const localHistory = new Set((local.history || []).map(trackKeyOf).filter(Boolean));
+  const add = { playlists: [], songs: [], liked: [], history: 0 };
+  const removed = { playlists: [], songs: [], liked: [] };
+  const selected = { playlists: [], songs: [], liked: [] };
+  const seenPlaylist = new Set(), seenSong = new Set(), seenLiked = new Set(), seenHistory = new Set();
+  for (const s of src) {
+    for (const p of s.playlists || []) {
+      const pkey = playlistKeyOf(p);
+      if (!pkey) continue;
+      const localP = localPls.get(pkey);
+      if (!localP) {
+        if (seenPlaylist.has(pkey)) continue;
+        seenPlaylist.add(pkey);
+        const item = { key: pkey, name: p.name || 'Untitled playlist', count: (p.tracks || []).length };
+        if (baseline?.playlists?.[pkey]) removed.playlists.push(item);
+        else { add.playlists.push(item); selected.playlists.push(pkey); }
+        continue;
+      }
+      const have = new Set((localP.tracks || []).map(trackKeyOf).filter(Boolean));
+      for (const t of p.tracks || []) {
+        const tkey = trackKeyOf(t);
+        if (!tkey || have.has(tkey)) continue;
+        const songKey = pkey + '\u0000' + tkey;
+        if (seenSong.has(songKey)) continue;
+        seenSong.add(songKey);
+        const item = { key: tkey, pkey, title: t.title || 'Untitled song', artist: t.artist || '', playlist: localP.name || p.name || 'Playlist' };
+        if (baseline?.playlists?.[pkey]?.tracks?.[tkey]) removed.songs.push(item);
+        else { add.songs.push(item); selected.songs.push([pkey, tkey]); }
+      }
+    }
+    for (const t of s.liked || []) {
+      const tkey = trackKeyOf(t);
+      if (!tkey || localLiked.has(tkey) || seenLiked.has(tkey)) continue;
+      seenLiked.add(tkey);
+      const item = { key: tkey, title: t.title || 'Untitled song', artist: t.artist || '' };
+      if (baseline?.liked?.[tkey]) removed.liked.push(item);
+      else { add.liked.push(item); selected.liked.push(tkey); }
+    }
+    for (const t of s.history || []) {
+      const tkey = trackKeyOf(t);
+      if (!tkey || localHistory.has(tkey) || seenHistory.has(tkey)) continue;
+      seenHistory.add(tkey);
+      add.history++;
+    }
+  }
+  const byName = (a, b) => String(a.name || a.title || '').localeCompare(String(b.name || b.title || ''));
+  add.playlists.sort(byName); add.liked.sort(byName);
+  removed.playlists.sort(byName);
+  removed.songs.sort((a, b) => String(a.playlist).localeCompare(String(b.playlist)) || String(a.title).localeCompare(String(b.title)));
+  removed.liked.sort(byName);
+  return { add, removed, selected };
+}
 const cleanSyncLibrary = v => {
   if (!v || typeof v !== 'object') throw httpErr(400, 'That device did not send a library');
-  return { playlists: syncList(v.playlists, 2000), liked: syncList(v.liked, 50000), history: syncList(v.history, 50000) };
+  return { playlists: syncList(v.playlists, 2000), liked: syncList(v.liked, 50000), history: syncList(v.history, 50000), listening: cleanListening(v.listening) };
 };
 const readSyncLibrary = () => {
   const st = readJSON('state.json', {}) || {};
-  return { playlists: syncList(st.playlists, 2000), liked: syncList(st.liked, 50000), history: syncList(st.history, 50000) };
+  return { playlists: syncList(st.playlists, 2000), liked: syncList(st.liked, 50000), history: syncList(st.history, 50000), listening: cleanListening(st.listening) };
 };
 const syncCounts = lib => ({
   playlists: lib.playlists.length,
   tracks: lib.playlists.reduce((n, p) => n + (Array.isArray(p.tracks) ? p.tracks.length : 0), 0),
   liked: lib.liked.length,
   history: lib.history.length,
+  devices: Object.keys((lib.listening && lib.listening.devices) || {}).length,
 });
 const stateStamp = () => { try { return fs.statSync(path.join(DATA, 'state.json')).mtimeMs; } catch { return 0; } };
 const applySyncLibrary = lib => {
@@ -1423,6 +1734,7 @@ const applySyncLibrary = lib => {
   state.playlists = lib.playlists;
   state.liked = lib.liked;
   state.history = lib.history;
+  state.listening = mergeListening(cleanListening(state.listening), lib.listening || { devices: {} });
   writeJSON('state.json', state);
 };
 const syncUrls = () => {
@@ -1443,6 +1755,9 @@ const syncStatus = () => {
     counts: syncCounts(lib),
     error: syncLastError,
     device: os.hostname(),
+    mergeReady: sync.role === 'host' ? !!(syncKeepHost || syncGuestSnaps.size) : false,
+    mergePeer: sync.role === 'host' ? [...new Set([...syncGuestSnaps.values()].map(x => x.name))].join(', ') : '',
+    mergeCount: sync.role === 'host' ? syncGuestSnaps.size : 0,
   };
 };
 const syncCodeOk = req => {
@@ -1463,7 +1778,21 @@ async function syncHostRequest(req, res) {
   if (req.method === 'OPTIONS') return syncSend(res, 204, {});
   if (u.pathname === '/api/sync/info') {
     if (req.method !== 'GET') return syncSend(res, 405, { error: 'Method not allowed' });
-    return syncSend(res, 200, { ok: true, name: os.hostname(), version: VERSION, rev: +sync.rev || 0, updatedAt: stateStamp(), port: SYNC_PORT });
+    return syncSend(res, 200, { ok: true, merge: true, name: os.hostname(), version: VERSION, rev: +sync.rev || 0, updatedAt: stateStamp(), port: SYNC_PORT });
+  }
+  /* Preview is its own path so an older host cannot mistake it for a library
+     replacement. Old hosts simply answer 404 and the caller falls back. */
+  if (u.pathname === '/api/sync/preview') {
+    if (req.method !== 'PUT') return syncSend(res, 405, { error: 'Method not allowed' });
+    if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
+    const raw = (await body(req, 25e6)).toString() || '{}';
+    let incoming;
+    try { incoming = JSON.parse(raw); } catch { throw httpErr(400, 'Bad library JSON'); }
+    const lib = cleanSyncLibrary(incoming.library || incoming);
+    return syncSend(res, 200, {
+      ok: true, role: 'guest', sources: [syncText(incoming.device, 80) || 'Device'],
+      ...previewMerge(readSyncLibrary(), [lib], readMergeBase()),
+    });
   }
   if (u.pathname !== '/api/sync/library') return syncSend(res, 404, { error: 'Not found' });
   if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
@@ -1475,7 +1804,28 @@ async function syncHostRequest(req, res) {
     let incoming;
     try { incoming = JSON.parse(raw); } catch { throw httpErr(400, 'Bad library JSON'); }
     const lib = cleanSyncLibrary(incoming.library || incoming);
+    const mode = u.searchParams.get('mode') || req.headers['x-wavelength-sync-mode'] || '';
+    const peerName = syncText(incoming.device, 80) || 'Device';
+    const peerKey = syncText(req.socket.remoteAddress || '', 80) + '|' + peerName;
+    if (mode === 'merge') {
+      const selected = cleanMergeSelection(incoming.selected);
+      const merged = mergeLibraries(readSyncLibrary(), [lib], selected);
+      applySyncLibrary(merged);
+      rememberMergeBase(readSyncLibrary());
+      /* Keep this copy as a recovery source for the host's own Merge button.
+         The host may delete something later and offer it back. */
+      syncGuestSnaps.set(peerKey, { lib, name: peerName });
+      sync.rev = (+sync.rev || 0) + 1;
+      sync.lastSync = Date.now();
+      syncSave();
+      return syncSend(res, 200, { ok: true, merged: true, rev: sync.rev, updatedAt: stateStamp(), counts: syncCounts(merged), library: merged });
+    }
+    /* Keep the host copy and every guest copy for the host's own Merge
+       button, so a replace can still be combined instead of losing data. */
+    if (!syncKeepHost) syncKeepHost = readSyncLibrary();
+    syncGuestSnaps.set(peerKey, { lib, name: peerName });
     applySyncLibrary(lib);
+    rememberMergeBase(lib);
     sync.rev = (+sync.rev || 0) + 1;
     sync.lastSync = Date.now();
     syncSave();
@@ -1488,6 +1838,7 @@ async function startSyncHost() {
   sync.enabled = true;
   sync.port = SYNC_PORT;
   if (!sync.code) sync.code = newSyncCode();
+  rememberMergeBase(readSyncLibrary());
   syncSave();
   if (syncServer) return syncStatus();
   syncLastError = '';
@@ -1525,6 +1876,8 @@ async function stopSyncHost() {
   sync.enabled = false;
   sync.rev = 0;
   syncLastError = '';
+  syncGuestSnaps = new Map();
+  syncKeepHost = null;
   syncSave();
   return syncStatus();
 }
@@ -1540,9 +1893,9 @@ const syncHostBase = input => {
   if (!u.port) u.port = String(SYNC_PORT);
   return u.origin;
 };
-async function syncRemote(base, code, route, init = {}) {
+async function syncRemote(base, code, route, init = {}, timeout = 9000) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 9000);
+  const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
     const r = await fetch(base + route, {
       ...init,
@@ -1564,11 +1917,35 @@ async function joinSync(input = {}) {
   const base = syncHostBase(input.url);
   const code = syncCode(input.code);
   if (code.length < 6) throw httpErr(400, 'Enter the pairing code shown on the host');
+  const local = readSyncLibrary();
   const info = await syncRemote(base, code, '/api/sync/info');
-  const remote = await syncRemote(base, code, '/api/sync/library');
-  if (!remote.library) throw httpErr(502, 'The host did not send a library');
+  let remote;
+  if (info.merge) {
+    /* New hosts support merge, so connecting keeps this device's playlists
+       too. Older hosts fall back to the documented pull-and-replace. */
+    let selected;
+    try {
+      const preview = await syncRemote(base, code, '/api/sync/preview', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library: readSyncLibrary(), device: os.hostname() }),
+      }, 30000);
+      selected = preview.selected;
+    } catch {}
+    remote = await syncRemote(base, code, '/api/sync/library?mode=merge', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library: readSyncLibrary(), device: os.hostname(), selected }),
+    }, 30000);
+    if (!remote.library) throw httpErr(502, 'The host did not send the merged library');
+  } else {
+    remote = await syncRemote(base, code, '/api/sync/library', {}, 30000);
+    if (!remote.library) throw httpErr(502, 'The host did not send a library');
+  }
   if (syncServer) await stopSyncHost();
-  applySyncLibrary(cleanSyncLibrary(remote.library));
+  const incoming = cleanSyncLibrary(remote.library);
+  /* Joining is additive too: items this device already has stay here even if
+     the host no longer has them. Only Pull replaces the local copy. */
+  applySyncLibrary(info.merge ? mergeLibraries(local, [incoming]) : incoming);
+  rememberMergeBase(readSyncLibrary());
   sync.role = 'guest';
   sync.enabled = true;
   sync.hostUrl = base;
@@ -1583,9 +1960,10 @@ async function joinSync(input = {}) {
 }
 async function pullSync() {
   if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'This device is not connected to a host');
-  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library');
+  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library', {}, 30000);
   if (!remote.library) throw httpErr(502, 'The host did not send a library');
   applySyncLibrary(cleanSyncLibrary(remote.library));
+  rememberMergeBase(readSyncLibrary());
   sync.rev = +remote.rev || 0;
   sync.remoteUpdatedAt = +remote.updatedAt || 0;
   sync.lastSync = Date.now();
@@ -1597,8 +1975,74 @@ async function pushSync() {
   if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'This device is not connected to a host');
   const lib = readSyncLibrary();
   const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ library: lib }),
-  });
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ library: lib, device: os.hostname() }),
+  }, 30000);
+  sync.rev = +remote.rev || 0;
+  sync.remoteUpdatedAt = +remote.updatedAt || 0;
+  sync.lastSync = Date.now();
+  syncLastError = '';
+  syncSave();
+  return syncStatus();
+}
+const hostMergeSources = () => [syncKeepHost, ...[...syncGuestSnaps.values()].map(x => x.lib)].filter(Boolean);
+/* Merge is available on both ends. A guest combines its library with the
+   host's and saves the result on both. A host combines the copy it had before
+   the last replacement with the libraries guests sent, so the host button can
+   recover data even when a guest used Send changes. */
+async function previewSync() {
+  let local, sources, names = [];
+  if (sync.role === 'host') {
+    local = readSyncLibrary();
+    sources = hostMergeSources();
+    names = [
+      ...(syncKeepHost ? ["this host's earlier copy"] : []),
+      ...new Set([...syncGuestSnaps.values()].map(x => x.name).filter(Boolean)),
+    ];
+    if (!sources.length) {
+      throw httpErr(400, 'No device has sent a library during this hosting session. On the other device, open Devices and choose Merge data.');
+    }
+  } else if (sync.role === 'guest' && sync.hostUrl) {
+    const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/preview', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library: readSyncLibrary(), device: os.hostname() }),
+    }, 30000);
+    if (!remote || (!remote.add && !remote.removed)) throw httpErr(502, 'The host did not send a merge preview');
+    return { ...remote, role: 'guest', sources: remote.sources || [sync.peer || 'the host'] };
+  } else {
+    throw httpErr(400, 'Start hosting or connect to a host before merging');
+  }
+  return { ok: true, role: sync.role, sources: names, ...previewMerge(local, sources, readMergeBase()) };
+}
+async function mergeSync(input = {}) {
+  const selection = cleanMergeSelection(input.selected);
+  if (sync.role === 'host') {
+    const sources = hostMergeSources();
+    if (!sources.length) {
+      throw httpErr(400, 'No device has sent a library during this hosting session. On the other device, open Devices and choose Merge data.');
+    }
+    const merged = mergeLibraries(readSyncLibrary(), sources, selection);
+    applySyncLibrary(merged);
+    rememberMergeBase(readSyncLibrary());
+    syncKeepHost = null;
+    syncGuestSnaps = new Map();
+    sync.rev = (+sync.rev || 0) + 1;
+    sync.lastSync = Date.now();
+    syncLastError = '';
+    syncSave();
+    return syncStatus();
+  }
+  if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'Connect to a host before merging');
+  const local = readSyncLibrary();
+  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/library?mode=merge', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ library: local, device: os.hostname(), selected: input.selected }),
+  }, 30000);
+  if (!remote.library) throw httpErr(502, 'The host did not send the merged library. Update the host, then try again.');
+  /* The host's answer is filtered by the confirmation menu. Union it with this
+     device's own copy so an unchecked item is left only on this device instead
+     of disappearing from both. */
+  applySyncLibrary(mergeLibraries(local, [cleanSyncLibrary(remote.library)]));
+  rememberMergeBase(readSyncLibrary());
   sync.rev = +remote.rev || 0;
   sync.remoteUpdatedAt = +remote.updatedAt || 0;
   sync.lastSync = Date.now();
@@ -1688,6 +2132,8 @@ async function api(req,res,u,p){
   if(m==='POST'&&p==='/api/sync/join') return json(res,await joinSync(await parse()));
   if(m==='POST'&&p==='/api/sync/pull') return json(res,await pullSync());
   if(m==='POST'&&p==='/api/sync/push') return json(res,await pushSync());
+  if(m==='POST'&&p==='/api/sync/merge/preview') return json(res,await previewSync());
+  if(m==='POST'&&p==='/api/sync/merge') return json(res,await mergeSync(await parse()));
   if(m==='POST'&&p==='/api/sync/disconnect') return json(res,await disconnectSync());
 
   if(m==='POST'&&p==='/api/cover'){
@@ -1712,7 +2158,11 @@ async function api(req,res,u,p){
   if(m==='GET'&&p==='/api/spotify/liked') return json(res,{name:'Liked Songs',tracks:await paged('/me/tracks?limit=50',it=>spTrack(it&&it.track))});
   if(m==='POST'&&p==='/api/spotify/logout'){try{fs.unlinkSync(path.join(DATA,'spotify.json'));}catch{}return json(res,{ok:true});}
 
-  if(m==='GET'&&p==='/api/search'){const s=(q.get('q')||'').trim().slice(0,200);return json(res,s?await search(s):[]);}
+  if(m==='GET'&&p==='/api/search'){
+    const s=(q.get('q')||'').trim().slice(0,200);
+    const noAi=/^(1|true|yes)$/i.test(q.get('noAi')||'');
+    return json(res,s?noAiFilter(await search(s),noAi):[]);
+  }
   if(m==='POST'&&p==='/api/match'){
     const b=await parse(),key=String(b.key||'').slice(0,80);
     if(key&&matches[key]) return json(res,{ytId:matches[key]});
@@ -1720,7 +2170,11 @@ async function api(req,res,u,p){
     if(id&&key){matches[key]=id;saveMatches();}
     return json(res,{ytId:id});
   }
-  if(m==='GET'&&(g=p.match(/^\/api\/related\/([A-Za-z0-9_-]{11})$/))) return json(res,await related(g[1]));
+  if(m==='GET'&&(g=p.match(/^\/api\/related\/([A-Za-z0-9_-]{11})$/))){
+    const noAi=/^(1|true|yes)$/i.test(q.get('noAi')||'');
+    return json(res,noAiFilter(await related(g[1]),noAi));
+  }
+  if(m==='GET'&&(g=p.match(/^\/api\/info\/([A-Za-z0-9_-]{11})$/))) return json(res,await videoInfo(g[1]));
   if(m==='GET'&&(g=p.match(/^\/api\/ready\/([A-Za-z0-9_-]{11})$/))) {
     const cached=cachedAudio(g[1]);
     if(cached){ const st=fs.statSync(cached); return json(res,{ok:true,cached:true,size:st.size,mime:AUDIO_MIME[path.extname(cached).toLowerCase()]||'audio/mp4'}); }

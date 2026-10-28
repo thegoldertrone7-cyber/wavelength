@@ -3,7 +3,11 @@
 Free, ad-free music app. Paste a Spotify link, it finds the songs on YouTube, plays them
 ad-free with endless playback, downloads MP3s, plays your own lossless files at native quality,
 custom playlist images, multiple interface styles, Catppuccin palettes and custom accent colours.
-The visual language, motion rules and feature map are documented in [DESIGN.md](DESIGN.md).
+Smart volume evens out quiet and loud tracks, smart shuffle balances songs across playlists, and
+the listening recap can cover a year or any custom date range.
+The product thesis, full feature map, platform status and release plan are in
+[PRODUCT_BIBLE.md](PRODUCT_BIBLE.md). The visual language and motion rules are in
+[DESIGN.md](DESIGN.md).
 
 ## Desktop app (macOS / Windows / Linux)
 
@@ -67,13 +71,40 @@ of songs and matches them on YouTube.
 
 Open **Settings -> Devices** on the device that should keep the main library and choose **Start hosting**.
 On the other device, choose **Join a host**, then enter the host address and the short pairing code.
-Playlists, liked songs and history stay in sync; themes, downloads and local files stay on each device.
+Playlists, liked songs, history and listening stats stay in sync; themes, downloads and local files stay
+on each device. On current versions, **Connecting merges** this device with the host, so neither library
+is thrown away. **Merge data** is available on every connected device, including the host.
+
+Merge previews the other copy first. New playlists, songs and liked songs are added automatically.
+Anything this device used to have but no longer does — while another copy still has it — opens a
+checklist instead: tick the items to bring back, or clear them to leave those items only on the
+other copy. Unchecked items are never deleted from the device that still has them. Listening history
+is always combined, and per-device listening totals keep the newest snapshot instead of being added
+twice.
+
+Merge is additive and not a deletion sync: deleting a playlist here does not delete it elsewhere,
+and a later merge will not quietly restore it unless you tick it. Wavelength keeps a grow-only
+baseline of items this device has seen, which is how it tells a genuinely new item from one that was
+removed here. The host cannot reach a sleeping guest, so its Merge data button combines the host copy
+with the libraries guests sent during the current hosting session. **Pull now** still replaces this
+device's library with the host's copy; **Send changes** replaces the host's library with this
+device's copy. There is no automatic background merge.
 
 The sync listener uses the next port after the player (`38422` for the desktop app). It is only active
 while Wavelength is open. Use Tailscale on both devices, or join over the same Wi-Fi and allow that port
-through the host firewall. **Pull now** replaces this device's library with the host's copy; **Send
-changes** replaces the host's library with this device's copy. Every paired guest can send changes;
-the newest push wins, and there is no automatic merge.
+through the host firewall. Every paired guest can send changes.
+
+## Listening recap
+
+Open **Recap** in the sidebar to see total listening time, plays, top songs, top artists and top
+playlists. Pick a year chip or enter any start and end date, then choose **Apply**.
+
+Complete calendar years use full-year totals, including listening recorded before daily detail existed.
+Custom date ranges use the daily listening detail recorded from this version onward: total time is
+complete for a range, but rankings for older days may be partial and are labelled when that happens.
+Devices are merged without counting the same device twice. YouTube does not provide reliable genre
+metadata, so the recap ranks artists, playlists and songs instead of inventing a genre. The recap is
+stored locally and travels with the library during sync.
 
 ## Android
 
@@ -92,7 +123,10 @@ On Android today:
 
 - Search YouTube, play songs and build playlists on the phone.
 - Keep the library on the phone and optionally sync it with a computer.
-- Control playback from the lock screen, notification, Bluetooth or a headset.
+- Merge the phone and computer libraries without removing either copy.
+- Control playback from the lock screen, notification, Bluetooth or a headset. Disconnecting
+  Bluetooth pauses playback when **Pause when headphones disconnect** is on.
+- Add the Wavelength home-screen widget for play/pause, previous and next.
 - Import a pasted list of songs from the Import page.
 
 Not yet available on Android: direct Spotify links/account import, offline downloads and
@@ -107,8 +141,9 @@ The computer is only needed while syncing; disconnect and keep listening on the 
    (for example `http://192.168.1.10:38422`) and the pairing code.
 2. On the phone, open **Settings → Devices → Join a host**, enter the address including
    the sync port and the pairing code.
-3. Use **Pull now** to replace the phone library with the host copy, or **Send changes** to
-   replace the host library with the phone copy. **Disconnect** when finished.
+3. Use **Merge data** to combine both libraries while keeping every playlist. Use **Pull now** only
+   when you want the host copy to replace the phone, or **Send changes** to replace the host with the
+   phone copy. **Disconnect** when finished.
 
 The sync listener runs only while Wavelength is open on the computer. Use Tailscale on both
 devices, or the same Wi-Fi and allow that port through the host firewall. Only sync on a
