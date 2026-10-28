@@ -9,6 +9,19 @@ The product thesis, full feature map, platform status and release plan are in
 [PRODUCT_BIBLE.md](PRODUCT_BIBLE.md). The visual language and motion rules are in
 [DESIGN.md](DESIGN.md).
 
+## Download v2.3.0
+
+All files are on the [v2.3.0 release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.3.0);
+checksums are in `SHA256SUMS.txt`.
+
+- **macOS** (Intel + Apple Silicon): `Wavelength-2.3.0-macos-universal.dmg`
+- **Windows**: `Wavelength-2.3.0-windows-setup.exe`
+- **Linux**: `Wavelength-2.3.0-linux.AppImage` or `Wavelength-2.3.0-linux-x86_64.flatpak`
+- **Android**: `Wavelength-2.3.0-android.apk`
+
+The macOS and Windows builds are unsigned, so the first launch shows the usual warning. Installation
+details, sync steps and limits are in [DOWNLOADS.md](DOWNLOADS.md).
+
 ## Desktop app (macOS / Windows / Linux)
 
 You need Node.js, yt-dlp and ffmpeg (which includes ffprobe). macOS:  `brew install node yt-dlp ffmpeg`
@@ -24,8 +37,8 @@ Build an installable app (run it on the OS you are building for):
     bash scripts/build-flatpak.sh   # -> dist/Wavelength-*-x86_64.flatpak (Linux)
 
 The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`.
-Each release page lists the installation files included; Android-only patch releases may contain
-just the APK and its checksum.
+Each release page lists the installation files included; v2.3.0 ships macOS, Windows, Linux and
+Android together.
 
 The app is unsigned. First launch on macOS: right-click the app -> Open, or run
 `xattr -cr /Applications/Wavelength.app`.

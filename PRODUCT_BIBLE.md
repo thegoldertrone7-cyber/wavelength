@@ -11,11 +11,12 @@
 | Build | Version | Notes |
 | --- | --- | --- |
 | Android APK | **v2.3.0** | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.2.4** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Published desktop installers | **v2.3.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.3.0 tree** | Runs through the bundled Node server |
 
-`v2.3.0` is an Android-only release. The desktop installers remain on `v2.2.4` until the next
-desktop release. This document describes shipped behaviour first and future direction second.
+`v2.3.0` ships every platform: macOS universal DMG, Windows installer, Linux AppImage, Flatpak and
+the Android APK. The desktop builds are unsigned. This document describes shipped behaviour first
+and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -1050,7 +1051,8 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The published desktop installers are v2.2.4.** v2.3.0 is an Android-only release.
+8. **The published installers are all v2.3.0.** The desktop builds are unsigned, so macOS and
+   Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
     service.
@@ -1065,9 +1067,9 @@ These are repeated in the interface and should remain true in every future relea
 - **v2.2.5** — standalone Android playback.
 - **v2.2.6** — Android title, seek, and system-bar fixes.
 - **v2.3.0** — merge data with a removed-item checklist, listening recap with custom dates, smart
-  volume, smarter shuffle, Remix playlists, No AI, credits skipping, Android widget. Android-only
-  release.
-- Desktop installers remain on **v2.2.4** until the next desktop release.
+  volume, smarter shuffle, Remix playlists, No AI, credits skipping, Android widget. Ships on
+  macOS, Windows, Linux (AppImage and Flatpak) and Android.
+- All published installers are on **v2.3.0**.
 
 ### 12.2 Phase 1 — Stabilise the instrument
 
@@ -1075,8 +1077,8 @@ These are repeated in the interface and should remain true in every future relea
 
 - Close Android papercuts: notification reliability, permission onboarding, back behaviour,
   safe areas, sync join errors.
-- Keep release notes, checksums, and install instructions accurate, especially when a release is
-  Android-only.
+- Keep release notes, checksums, and install instructions accurate, especially when a release ships
+  a subset of platforms.
 - Audit all 14 palettes × 8 styles at Default / Large / Extra large text.
 - Audit reduced motion, high contrast, keyboard focus, and 360 px layouts.
 - Reduce cold-start and search latency; keep the player responsive during matching and downloads.

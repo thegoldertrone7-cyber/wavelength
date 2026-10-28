@@ -1,16 +1,29 @@
 # Downloads
 
-Latest release: **v2.3.0** — [Wavelength 2.3.0 APK](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.3.0).
-
-Desktop release: **v2.2.4** — [macOS, Windows, AppImage and Flatpak](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.2.4).
-
-> v2.3.0 is an **Android-only** release. The desktop builds remain on v2.2.4 until the next desktop release.
-> No desktop installation files are needed for this update.
+Latest release: **v2.3.0** — [Wavelength 2.3.0 for macOS, Windows, Linux and Android](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.3.0).
 
 **v2.3.0** adds merge data with a removed-item checklist, listening recap with custom dates, the
 home-screen widget, No AI, credits skipping, smart volume (desktop/browser), smarter shuffle and
-playlist sorting. Release APK: `Wavelength-2.3.0-android.apk` — SHA-256
-`0183eef00e7b022b7b10771251bbda5175e5b4e2dadc8ace4c5fafea8287b8ab`.
+playlist sorting. This is a full release: the desktop installers are v2.3.0 as well as the APK.
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Intel + Apple Silicon) | `Wavelength-2.3.0-macos-universal.dmg` | Unsigned; right-click → Open |
+| Windows 10/11 | `Wavelength-2.3.0-windows-setup.exe` | NSIS installer, unsigned |
+| Linux | `Wavelength-2.3.0-linux.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux | `Wavelength-2.3.0-linux-x86_64.flatpak` | Bundles `yt-dlp`, `ffmpeg`, `ffprobe` |
+| Android | `Wavelength-2.3.0-android.apk` | Debug-signed, direct install |
+
+`SHA256SUMS.txt` lists the checksum for every file. The Android APK checksum is also published as
+`Wavelength-2.3.0-android.apk.sha256`.
+
+```
+0183eef00e7b022b7b10771251bbda5175e5b4e2dadc8ace4c5fafea8287b8ab  Wavelength-2.3.0-android.apk
+a1fae8f4575a11a549a4d05c16c4d6b47b7338d193378ca716e9903656e5660a  Wavelength-2.3.0-macos-universal.dmg
+48246417f4bfe9769042dfb099134d1f24da2e464e112eabe36415572b703340  Wavelength-2.3.0-windows-setup.exe
+8069887f6f3f9eafd2dad546db27155c58ba390d3791c548266314b4aa7cbf09  Wavelength-2.3.0-linux.AppImage
+95880ad21cfd9f7d5c64a25e08166f74ebf614fb2d51795872b9e6142b14bdd2  Wavelength-2.3.0-linux-x86_64.flatpak
+```
 
 ## Android
 
@@ -60,9 +73,10 @@ them on YouTube.
 
 ## Desktop
 
-- **macOS**: `Wavelength-2.2.4-universal.dmg` (Intel + Apple Silicon). If unsigned, right-click →
-  Open or run `xattr -cr /Applications/Wavelength.app`.
-- **Windows**: `Wavelength.Setup.2.2.4.exe` NSIS installer.
-- **Linux**: `Wavelength-2.2.4.AppImage` or `Wavelength-2.2.4-x86_64.flatpak`. The Flatpak bundles
-  `yt-dlp`, `ffmpeg` and `ffprobe`.
+- **macOS**: `Wavelength-2.3.0-macos-universal.dmg` (Intel + Apple Silicon). The build is unsigned;
+  right-click → Open, or run `xattr -cr /Applications/Wavelength.app`.
+- **Windows**: `Wavelength-2.3.0-windows-setup.exe` NSIS installer. It is unsigned, so SmartScreen
+  may ask for "More info → Run anyway".
+- **Linux**: `Wavelength-2.3.0-linux.AppImage` or `Wavelength-2.3.0-linux-x86_64.flatpak`. The
+  Flatpak bundles `yt-dlp`, `ffmpeg` and `ffprobe`.
 - The normal DMG/EXE/AppImage builds expect `yt-dlp` and `ffmpeg` on the computer.
