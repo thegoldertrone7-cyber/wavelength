@@ -11,12 +11,12 @@
 | Build | Version | Notes |
 | --- | --- | --- |
 | Android APK | **v2.4.0** | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.3.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Published desktop installers | **v2.4.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.0 tree** | Runs through the bundled Node server |
 
-The `v2.4.0` tree adds the Android work; the Android APK is built from it and the newest desktop
-installers still point at `v2.3.0` until they are republished. The desktop builds are unsigned.
-This document describes shipped behaviour first and future direction second.
+`v2.4.0` ships every platform: macOS universal DMG, Windows installer, Linux AppImage, Flatpak
+and the Android APK. The desktop builds are unsigned. This document describes shipped behaviour
+first and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -1081,7 +1081,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The published installers are all v2.3.0.** The desktop builds are unsigned, so macOS and
+8. **The published installers are all v2.4.0.** The desktop builds are unsigned, so macOS and
    Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1101,9 +1101,9 @@ These are repeated in the interface and should remain true in every future relea
   macOS, Windows, Linux (AppImage and Flatpak) and Android.
 - **v2.4.0** — Android widget with artwork and album, visualizer settings with four sizes and a
   full-screen backdrop, a playback-driven Android visualizer, a brief lock-screen now-playing
-  view, and volume control that follows the phone's media stream. Android APK built from this
-  tree; desktop installers remain on `v2.3.0` until republished.
-- All published desktop installers are on **v2.3.0**; the newest Android APK is **v2.4.0**.
+  view, and volume control that follows the phone's media stream. Ships on macOS, Windows,
+  Linux (AppImage and Flatpak) and Android.
+- All published installers are on **v2.4.0**.
 
 ### 12.2 Phase 1 — Stabilise the instrument
 

@@ -157,7 +157,10 @@ jobs:
   release:
     name: Publish Release
     needs: [mac, windows, linux, flatpak, android]
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release == 'true'
+    # Releases are published from a manual run. A tag push only builds, because
+    # the CI APK is signed with a throwaway debug key and must never replace the
+    # locally signed APK on the release page.
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
@@ -165,8 +168,10 @@ jobs:
         with:
           path: release
           merge-multiple: true
-      - name: List release files
-        run: ls -lh release
+      - name: Never publish the CI-signed APK
+        run: |
+          rm -f release/*.apk release/*.apk.sha256
+          ls -lh release
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
