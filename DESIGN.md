@@ -150,8 +150,12 @@ queue, full-screen and volume controls.
 
 The full-screen view is a quiet, blurred room built from the current cover. It contains the
 large artwork, title, artist, like control, optional audio visualiser, seek bar and transport.
-The visualiser has four modes (Matrix, Bars, Wave, Radial) and reacts to the actual audio
-signal rather than a canned animation.
+The visualiser has four modes (Matrix, Bars, Wave, Radial) and four sizes — small, medium, large
+and full screen, where the canvas becomes the room's backdrop. On desktop and in the browser it
+reacts to the actual audio signal rather than a canned animation. Android's WebView player
+exposes no samples, so the phone draws a track-seeded spectrum from the playback clock: it moves
+while a song plays, changes per track, and settles flat on pause. The settings describe it as
+playback-driven instead of claiming real audio analysis.
 
 Track changes cross-fade and slide the metadata; the cover art updates with a short fade. The
 player never jumps height because of a long title or artist name.
@@ -174,7 +178,9 @@ player never jumps height because of a long title or artist name.
 - Listening recap with year presets and custom start/end dates.
 - 14 palettes, custom accents, 8 interface styles, text-size and contrast controls.
 - Reduced motion, keyboard shortcuts, focus-visible rings and touch-sized controls.
-- Android lock-screen, notification, Bluetooth, headset and home-screen widget controls.
+- Android lock-screen, notification, Bluetooth and headset controls; a home-screen widget with
+  artwork, album and transport; and a brief lock-screen now-playing view with the visualizer
+  behind it.
 - Standalone Android playback through NewPipeExtractor, with optional computer sync.
 
 ## Android character
@@ -187,14 +193,19 @@ The Android build keeps the same visual language but changes the physical behavi
   through and icon brightness following the light/dark theme;
 - safe-area variables keep content above gesture navigation, three-button navigation and
   display cutouts;
-- the back gesture closes overlays or returns through history instead of exiting abruptly.
+- the back gesture closes overlays or returns through history instead of exiting abruptly;
+- volume uses the phone's media stream, so the in-app slider, the hardware keys and Android's
+  volume panel all stay in step;
+- locking the phone during playback briefly surfaces a now-playing view with the visualizer
+  behind it, then steps out of the way.
 
 The goal is for Android to feel like Wavelength, not like a web page in a phone-shaped box.
 
 ## What to avoid
 
 - No bright gradients competing with album art.
-- No fake audio visualisation; movement should follow real playback.
+- No fake audio visualisation; movement should follow real playback. Where real samples are
+  unreachable (Android), say the motion is playback-driven rather than pretending.
 - No layout shift when titles, artists or queue contents change.
 - No tiny touch targets or hover-only actions on phones.
 - No style that makes the transport hard to find. The play button is always the strongest

@@ -10,13 +10,13 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.3.0** | Standalone, debug-signed, direct install |
+| Android APK | **v2.4.0** | Standalone, debug-signed, direct install |
 | Published desktop installers | **v2.3.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
-| Source / browser mode | **v2.3.0 tree** | Runs through the bundled Node server |
+| Source / browser mode | **v2.4.0 tree** | Runs through the bundled Node server |
 
-`v2.3.0` ships every platform: macOS universal DMG, Windows installer, Linux AppImage, Flatpak and
-the Android APK. The desktop builds are unsigned. This document describes shipped behaviour first
-and future direction second.
+The `v2.4.0` tree adds the Android work; the Android APK is built from it and the newest desktop
+installers still point at `v2.3.0` until they are republished. The desktop builds are unsigned.
+This document describes shipped behaviour first and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -617,8 +617,10 @@ Sections:
 
 - **Appearance** — palette, accent, interface style, style guide.
 - **Reading comfort** — Default / Large / Extra large, stronger contrast.
-- **Motion & sound** — match system or reduced motion; visualizer style and visibility.
-- **Playback** — endless playback, gapless preparation, resume, streaming quality, sleep timer.
+- **Motion & sound** — match system or reduced motion; visualizer visibility, style and size; the
+  Android lock-screen now playing toggle and preview.
+- **Playback** — endless playback, gapless preparation, resume, streaming quality, sleep timer,
+  and on Android a media-volume slider.
 - **Devices** — host/join, pair code, addresses, pull/send, counts, last sync.
 - **Storage** — MP3 quality, download folder, local files, cache usage, clear cache.
 - **Spotify** — client ID, connection state, import entry points.
@@ -671,7 +673,8 @@ Sections:
 - Session resume of queue and position.
 - Sleep timer.
 - Streaming quality: best available or data saver.
-- Full-screen player with four real-audio visualizer modes.
+- Full-screen player with four visualizer modes: real audio on desktop/browser, playback-driven on
+  Android.
 - Broken-track skipping and retry handling.
 - Bluetooth or headphone disconnect pauses playback. Android listens for the system noisy-audio
   broadcast; desktop/browser watches output devices on a best-effort basis.
@@ -726,7 +729,9 @@ Sections:
 - Three text sizes.
 - High-contrast mode.
 - Reduced motion.
-- Four visualizer styles.
+- Four visualizer styles and four sizes, including a full-screen backdrop.
+- Android lock-screen now playing: artwork, song details and the visualizer for a few seconds after
+  the screen turns off.
 - Custom playlist covers.
 
 ### 8.8 Trust and access
@@ -800,7 +805,10 @@ These are the details that make the app feel planned rather than assembled.
 - **Keyboard control is complete.** Space/K, N/P, arrows, M, L, S, R, F, Q, `/`, `?`, Esc.
 - **The full-screen player opens from the artwork.** Also from the title, the expand button, `F`,
   a double-click, or a swipe up.
-- **The visualizer has four modes.** Matrix, Bars, Wave, and Radial all read the real audio signal.
+- **The visualizer has four modes and four sizes.** Matrix, Bars, Wave, and Radial read the real
+  audio signal on desktop and in the browser. On Android the WebView player exposes no samples, so
+  the phone draws a track-seeded spectrum from the playback clock. Sizes range from small to a
+  full-screen backdrop.
 - **The queue closes with a swipe.** On phones, swipe down on the sheet.
 - **The sleep timer survives reloads.** It is stored as an absolute time, not a countdown that
   restarts.
@@ -810,8 +818,9 @@ These are the details that make the app feel planned rather than assembled.
 - **Broken tracks do not stop the queue.** The app shows a toast and skips, with retry handling.
 - **Buffering is visible.** The play button gets a spinner ring and the UI does not pretend to be
   playing.
-- **The visualizer is real.** It reads the audio analyser, not a canned animation, and pauses when
-  the tab is hidden.
+- **The visualizer is real where the audio is reachable.** Desktop and browser read the audio
+  analyser, not a canned animation, and pause when the tab is hidden. Android cannot reach the
+  WebView's samples, so it says playback-driven rather than claiming a real spectrum.
 
 ### 9.3 Around the library
 
@@ -842,10 +851,15 @@ These are the details that make the app feel planned rather than assembled.
 
 - **The phone build is standalone.** Search, streaming, playlists, liked songs, and history live
   on the device.
-- **The home-screen widget is a remote.** Play/pause, previous and next work while the app is
-  playing; with no live playback bridge, tapping opens Wavelength.
+- **The home-screen widget is a remote with album context.** It shows artwork, title, artist,
+  album, and a Playing/Paused label, and play/pause, previous and next work while the app is
+  playing. With no live playback bridge, tapping opens Wavelength.
 - **Lock-screen and notification controls work.** Previous, play/pause, and next are available;
   the MediaSession handles headset and Bluetooth commands.
+- **Locking the phone during playback shows a brief now-playing screen.** Artwork, song details,
+  progress, transport and the visualizer appear over the lock screen, then fade out after about
+  nine seconds so unlocking still lands on the normal keyguard. Android 14 and newer require the
+  user to allow full-screen notifications; settings says so and links to the switch.
 - **Bluetooth disconnect pauses.** The service listens for Android's noisy-audio broadcast and
   pauses instead of blasting the speaker.
 - **Merge before you replace.** Devices can merge libraries from the sync panel; Pull now and
@@ -859,6 +873,8 @@ These are the details that make the app feel planned rather than assembled.
   before leaving it; overlays also have explicit close controls.
 - **Long-press opens the row menu.** No need to hunt for a tiny overflow button.
 - **Swipe up opens the full player; swipe down closes it.**
+- **Volume is the phone's.** The full-screen player and Settings → Playback control the media
+  stream, so the in-app slider follows the hardware keys and Android's volume panel.
 - **Touch targets grow.** Coarse pointers get 44 px buttons and taller rows.
 - **Haptics acknowledge actions.** Short ticks on play, long-press, mute, and gestures.
 
@@ -916,13 +932,17 @@ cloud product.
 - NewPipeExtractor resolves YouTube audio directly on the phone.
 - Library stored in the app and survives with the computer off.
 - Sync is guest-only: join a desktop host, connect with merge, pull, send, disconnect.
-- Home-screen widget with play/pause, previous and next.
+- Home-screen widget with artwork, title, artist, album, state, and play/pause, previous and next.
+- Full-screen player visualizer in all four styles and four sizes, including a full-screen backdrop.
+  The WebView player exposes no audio samples, so Android draws a track-seeded spectrum driven by
+  the playback clock: it moves only while a song plays and settles flat on pause.
+- Brief lock-screen now-playing view with artwork, song details, progress, controls, and the
+  visualizer as the background. Shown when the screen turns off during playback, auto-hides.
 - Bluetooth and headset disconnect pauses playback when the setting is on.
 - Import is paste-list only; direct Spotify links and account import are not available.
 - Offline downloads and local-file playback are not in this build and are named as the next
   standalone steps.
-- No hosting, no visualizer, no gapless toggle, no uploaded image covers, no smart-volume
-  processing.
+- No hosting, no gapless toggle, no uploaded image covers, no smart-volume processing.
 - Background playback uses a foreground service and MediaSession.
 - APK is debug-signed for direct installation, not a Play Store build.
 
@@ -939,7 +959,7 @@ cloud product.
 | Uploaded image covers | Yes | Yes | No |
 | MP3 downloads | Yes | Yes | No |
 | Local lossless playback | Yes | Yes | No |
-| Visualizers | Yes | Yes | No |
+| Visualizers | Yes (real audio) | Yes (real audio) | Yes (playback-driven) |
 | Gapless preparation | Yes | Yes | No |
 | Endless playback | Yes | Yes | Yes |
 | Sleep timer | Yes | Yes | Yes |
@@ -960,8 +980,10 @@ cloud product.
 | No AI / blocked artist filter (best effort) | Yes | Yes | Yes |
 | Credits / outro skipping (metadata-based) | Yes | Yes | Yes |
 | Smart volume | Yes | Yes | No |
+| In-app volume control | Yes | Yes | Yes (phone media stream) |
 | Bluetooth disconnect pause | Best effort | Best effort | Yes |
-| Home-screen widget | No | No | Yes |
+| Home-screen widget | No | No | Yes (art, album, transport) |
+| Lock-screen now-playing view | No | No | Yes (brief, with visualizer) |
 
 ---
 
@@ -994,11 +1016,14 @@ cloud product.
 - Paste-list import with YouTube matching.
 - Sync as a guest.
 - Background playback, lock-screen/notification controls, Bluetooth/headset controls.
+- Home-screen widget with artwork, title, artist, album, state, and transport.
+- Visualizer in four styles and four sizes, including a full-screen backdrop.
+- Brief lock-screen now-playing view with artwork, progress, controls and the visualizer.
 - Transparent system bars, safe areas, back handling.
 - The same palette/style/reading/motion system.
 - Icon, emoji, and tone playlist covers.
 
-**Current source build (not yet published)**
+**Current source build (v2.4.0 tree)**
 
 - Merge data on guest and host, with host recovery after a replacement.
 - Listening stats per device, merged through sync.
@@ -1007,7 +1032,11 @@ cloud product.
 - Smart volume on desktop/browser; Bluetooth disconnect pause on Android.
 - No AI keyword filter and blocked artists.
 - Metadata-based credits/outro skipping.
-- Android home-screen widget.
+- Android home-screen widget with artwork, album, state and transport.
+- Android visualizer in four styles and four sizes, including a full-screen backdrop.
+- Android brief lock-screen now-playing view with the visualizer behind it.
+- Android volume control bound to the phone's media stream, mirrored in the full-screen player
+  and Settings → Playback.
 
 ### 11.2 Not in this build
 
@@ -1029,6 +1058,7 @@ cloud product.
 | Reliable AI-song detection | Not implemented | No AI is a keyword and blocked-artist filter, not musical detection. |
 | Exact credits skipping | Best effort | Needs chapter metadata naming credits or an outro in the second half of the track. |
 | Smart volume on Android | Not available | Android playback bypasses the Web Audio processing chain. |
+| Real-audio visualizer on Android | Not possible | The WebView's native player exposes no analyser, so the phone draws a track-seeded spectrum from the playback clock. |
 | Detailed recap rankings before this version | Partial | Total time is complete; per-song/artist/playlist ranking for older partial ranges starts with daily detail from this version. |
 | Merge preview for offline devices | Not available | A host can only preview libraries guests sent during the current hosting session. |
 | Deletion propagation | Not implemented | Merge is additive. A grow-only local baseline spots items removed here but still on another copy and offers them back; deleting an item never removes it from another device. |
@@ -1069,7 +1099,11 @@ These are repeated in the interface and should remain true in every future relea
 - **v2.3.0** — merge data with a removed-item checklist, listening recap with custom dates, smart
   volume, smarter shuffle, Remix playlists, No AI, credits skipping, Android widget. Ships on
   macOS, Windows, Linux (AppImage and Flatpak) and Android.
-- All published installers are on **v2.3.0**.
+- **v2.4.0** — Android widget with artwork and album, visualizer settings with four sizes and a
+  full-screen backdrop, a playback-driven Android visualizer, a brief lock-screen now-playing
+  view, and volume control that follows the phone's media stream. Android APK built from this
+  tree; desktop installers remain on `v2.3.0` until republished.
+- All published desktop installers are on **v2.3.0**; the newest Android APK is **v2.4.0**.
 
 ### 12.2 Phase 1 — Stabilise the instrument
 

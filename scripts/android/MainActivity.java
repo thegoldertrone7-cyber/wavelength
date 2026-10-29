@@ -2,16 +2,21 @@ package app.wavelength.music;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
@@ -111,6 +116,9 @@ public class MainActivity extends AppCompatActivity {
     private final Map<String, CacheEntry> streamCache = new ConcurrentHashMap<>();
     private final Map<String, CacheEntry> infoCache = new ConcurrentHashMap<>();
     private SharedPreferences prefs;
+    private NotificationManager notificationManager;
+    private AudioManager audioManager;
+    private boolean volumeReceiverOn = false;
     private File stateFile;
     private boolean pageReady = false;
     private int safeTopCss = 0;
@@ -130,6 +138,8 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(state);
         current = this;
         prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         stateFile = new File(getFilesDir(), "state.json");
         ensureNewPipe();
         requestNotificationPermission();
@@ -137,8 +147,34 @@ public class MainActivity extends AppCompatActivity {
         buildWebView();
         setContentView(wv, new ViewGroup.LayoutParams(-1, -1));
         setupInsets();
+        watchMediaVolume();
         pendingShare = shareTarget(getIntent());
         wv.loadUrl(START_URL);
+    }
+
+    /* The hardware volume keys change the media stream directly. Mirror those
+       changes into the page so the in-app slider stays truthful. */
+    private final BroadcastReceiver volumeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            int type = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1);
+            if (type != AudioManager.STREAM_MUSIC || audioManager == null || wv == null) return;
+            int level = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            int max = Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+            wv.evaluateJavascript("window.wlMediaVolume&&window.wlMediaVolume("
+                + level + "," + max + ");", null);
+        }
+    };
+
+    private void watchMediaVolume() {
+        try {
+            // The constant itself is not in the public SDK, but this is the
+            // system broadcast Android sends whenever the media stream moves.
+            registerReceiver(volumeReceiver,
+                new IntentFilter("android.media.VOLUME_CHANGED_ACTION"));
+            volumeReceiverOn = true;
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -299,6 +335,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (current == this) current = null;
+        if (volumeReceiverOn) {
+            try { unregisterReceiver(volumeReceiver); } catch (Exception ignored) {}
+            volumeReceiverOn = false;
+        }
         if (isFinishing()) PlaybackService.stop(this);
         if (wv != null) {
             wv.stopLoading();
@@ -365,6 +405,88 @@ public class MainActivity extends AppCompatActivity {
         public void setHeadphonesPause(boolean on) {
             getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putBoolean("headphones_pause", on).apply();
+        }
+
+        /* Visualizer and lock-screen preferences are mirrored into native
+           storage so the widget and the lock-screen view can read them without
+           the page being alive. */
+        @JavascriptInterface
+        public void setVisualizerPrefs(String style, String size, boolean enabled,
+                                       boolean lockScreen, String accent) {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("viz_style", style == null ? "matrix" : style)
+                .putString("viz_size", size == null ? "md" : size)
+                .putBoolean("viz_enabled", enabled)
+                .putBoolean("lockscreen_show", lockScreen)
+                .putString("viz_accent", accent == null ? "#d71921" : accent)
+                .apply();
+        }
+
+        @JavascriptInterface
+        public void previewLockScreen() {
+            main.post(() -> {
+                try {
+                    startActivity(new Intent(MainActivity.this, NowPlayingActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                } catch (Exception ignored) {}
+            });
+        }
+
+        /* Volume is the phone's own media stream, not the WebView's element
+           volume. That makes the slider match the hardware keys and the system
+           volume panel. The page mirrors changes back with wlMediaVolume(). */
+        @JavascriptInterface
+        public String mediaVolume() {
+            if (audioManager == null) return "";
+            int max = Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+            int level = Math.max(0, Math.min(max,
+                audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)));
+            return "{\"level\":" + level + ",\"max\":" + max + "}";
+        }
+
+        @JavascriptInterface
+        public boolean setMediaVolume(double fraction) {
+            if (audioManager == null) return false;
+            try {
+                int max = Math.max(1, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                double f = Math.max(0, Math.min(1, fraction));
+                int level = (int) Math.round(f * max);
+                if (level == 0 && f > 0) level = 1;
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean lockScreenAllowed() {
+            if (Build.VERSION.SDK_INT < 34 || notificationManager == null) return true;
+            try {
+                return notificationManager.canUseFullScreenIntent();
+            } catch (Exception e) {
+                return true;
+            }
+        }
+
+        @JavascriptInterface
+        public void openLockScreenSettings() {
+            main.post(() -> {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                            .setData(Uri.parse("package:" + getPackageName())));
+                        return;
+                    } catch (Exception ignored) {}
+                }
+                try {
+                    startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+                } catch (Exception ignored) {
+                    Toast.makeText(MainActivity.this, "Open Android Settings to allow it",
+                        Toast.LENGTH_SHORT).show();
+                }
+            });
         }
 
         @JavascriptInterface

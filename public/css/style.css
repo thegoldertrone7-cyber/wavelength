@@ -256,6 +256,20 @@ body:not(.playing) .pp .dm{transform:translateX(3px)}
 .np-meta p{font:400 13px var(--font-m);color:var(--text2);margin-top:6px;max-width:min(560px,82vw);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #viz{width:min(560px,90vw);height:150px}
 .np .acts{margin-top:4px}
+.np-vol{display:flex;align-items:center;gap:10px;width:min(340px,74vw)}
+.np-vol .vol{flex:1;width:auto}
+.np-vol .ib{width:38px;height:38px}
+html[data-viz-size=full] .np-vol{opacity:.94}
+
+/* Visualizer sizes. Full screen turns the canvas into the player's backdrop,
+   so the artwork and controls sit on top of the moving field. */
+html[data-viz-size=sm] #viz{height:96px}
+html[data-viz-size=lg] #viz{height:230px}
+html[data-viz-size=full] #viz{position:absolute;inset:0;z-index:-1;width:100%;height:100%;opacity:.62;pointer-events:none}
+html[data-viz-size=full] .np-bg{opacity:.16;filter:blur(70px) saturate(1.4)}
+html[data-viz-size=full] .np-art{width:min(200px,24vh)}
+html[data-viz-size=full] .np-meta{min-height:auto}
+html[data-viz-size=full] .np{gap:12px}
 
 /* ───────── queue / modal / menu / toast ───────── */
 .queue{position:fixed;top:12px;right:12px;bottom:116px;width:350px;max-width:calc(100vw - 24px);z-index:30;display:flex;flex-direction:column;padding:20px 14px 12px;transform:translateX(calc(100% + 30px)) scale(.95);opacity:0;pointer-events:none;transition:transform .7s var(--spring),opacity .35s;box-shadow:0 30px 70px -20px rgba(0,0,0,.8)}
@@ -345,6 +359,9 @@ body:not(.playing) .pp .dm{transform:translateX(3px)}
 .tg.on{background:rgba(var(--accent-rgb),.22)}
 .tg.on::after{transform:translateX(24px);background:var(--accent);box-shadow:0 0 14px var(--accent)}
 select.inp{width:auto;min-width:150px;padding-right:14px;cursor:pointer}
+input.range{width:180px;height:34px;padding:0 4px;border:0;background:transparent;accent-color:var(--accent);cursor:pointer}
+input.range::-webkit-slider-runnable-track{height:5px;border-radius:999px;background:var(--dot)}
+input.range::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-6.5px;border-radius:50%;background:var(--accent)}
 .inline{display:flex;gap:10px;flex-wrap:wrap}.inline .inp{flex:1;min-width:200px}
 code,.code{font:400 12px var(--font-m);background:var(--card);border:1px solid var(--line);padding:10px 16px;border-radius:999px;display:inline-block;word-break:break-all}
 .steps{display:grid;gap:10px;margin:0 0 18px;counter-reset:s;list-style:none;padding:0}
@@ -1113,9 +1130,15 @@ img{color:transparent}
   .np .x{top:calc(14px + var(--safe-top));right:max(14px,env(safe-area-inset-right))}
   .np-art{width:min(68vw,290px)}
   #viz{height:110px}
+  html[data-viz-size=sm] #viz{height:84px}
+  html[data-viz-size=lg] #viz{height:170px}
+  html[data-viz-size=full] .np-art{width:min(52vw,210px)}
+  html[data-viz-size=full] .np-meta h2{font-size:clamp(20px,6vw,28px)}
   .np-meta h2{font-size:clamp(24px,7vw,34px)}
   .np .ctl{gap:14px}
   .np .ib{width:44px;height:44px}
+  .np-vol{width:min(320px,82vw);gap:12px}
+  .np-vol .ib{width:40px;height:40px}
   .q-h h3{font-size:20px}
   .read-demo{font-size:14px}
   .storage-box{padding:12px 13px}

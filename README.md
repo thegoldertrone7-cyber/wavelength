@@ -139,7 +139,19 @@ On Android today:
 - Merge the phone and computer libraries without removing either copy.
 - Control playback from the lock screen, notification, Bluetooth or a headset. Disconnecting
   Bluetooth pauses playback when **Pause when headphones disconnect** is on.
-- Add the Wavelength home-screen widget for play/pause, previous and next.
+- Change volume from the full-screen player or **Settings → Playback**. It moves the phone's
+  media stream, so the slider, the hardware keys and Android's volume panel stay in step.
+- Add the Wavelength home-screen widget. It shows the artwork, title, artist, album and a
+  Playing/Paused label, with previous, play/pause and next buttons.
+- Open the full-screen player for the visualizer. All four styles are there, in small, medium,
+  large and full-screen sizes; the full-screen size turns the visualizer into the player backdrop.
+  Android plays audio inside the WebView, which exposes no samples, so the phone draws a
+  track-seeded spectrum from the playback clock: it moves while a song plays and settles flat on
+  pause. It is not a real audio spectrum, and the settings say so.
+- Lock the phone during playback to see a brief now-playing view: artwork, song details, progress,
+  controls, and the visualizer as the background. It fades out after a few seconds. On Android 14
+  and newer, settings offers an **Allow lock-screen display** row when Android still needs the
+  full-screen notification permission.
 - Import a pasted list of songs from the Import page.
 
 Not yet available on Android: direct Spotify links/account import, offline downloads and

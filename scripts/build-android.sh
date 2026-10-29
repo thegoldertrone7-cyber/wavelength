@@ -90,6 +90,7 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
   <application
     android:allowBackup="true"
     android:icon="@mipmap/ic_launcher"
@@ -119,6 +120,15 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
         <data android:scheme="https" android:host="open.spotify.com"/>
       </intent-filter>
     </activity>
+    <activity
+      android:name=".NowPlayingActivity"
+      android:exported="false"
+      android:launchMode="singleTop"
+      android:excludeFromRecents="true"
+      android:showWhenLocked="true"
+      android:turnScreenOn="true"
+      android:configChanges="orientation|screenSize|keyboardHidden"
+      android:theme="@style/Theme.NowPlaying"/>
     <service
       android:name=".PlaybackService"
       android:exported="false"
@@ -142,9 +152,9 @@ cat > "$PROJECT/app/src/main/res/xml/wavelength_widget_info.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
   android:minWidth="250dp"
-  android:minHeight="90dp"
+  android:minHeight="160dp"
   android:targetCellWidth="4"
-  android:targetCellHeight="2"
+  android:targetCellHeight="3"
   android:updatePeriodMillis="0"
   android:initialLayout="@layout/wavelength_widget"
   android:resizeMode="horizontal|vertical"
@@ -163,42 +173,95 @@ cat > "$PROJECT/app/src/main/res/layout/wavelength_widget.xml" <<'EOF'
   android:background="@drawable/widget_bg"
   android:padding="14dp">
 
-  <TextView
-    android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
-    android:text="WAVELENGTH"
-    android:textColor="#99FFFFFF"
-    android:textSize="9sp"
-    android:letterSpacing="0.2"
-    android:fontFamily="sans-serif-medium"/>
-
-  <TextView
-    android:id="@+id/widget_title"
+  <LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="4dp"
-    android:text="Wavelength"
-    android:textColor="#FFFFFFFF"
-    android:textSize="16sp"
-    android:fontFamily="sans-serif-medium"
-    android:maxLines="1"
-    android:ellipsize="end"/>
+    android:orientation="horizontal"
+    android:gravity="center_vertical">
 
-  <TextView
-    android:id="@+id/widget_artist"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_marginTop="1dp"
-    android:text="Tap to open"
-    android:textColor="#B3FFFFFF"
-    android:textSize="12sp"
-    android:maxLines="1"
-    android:ellipsize="end"/>
+    <ImageView
+      android:id="@+id/widget_art"
+      android:layout_width="72dp"
+      android:layout_height="72dp"
+      android:scaleType="centerCrop"
+      android:background="@drawable/widget_art_bg"
+      android:contentDescription="Album art"/>
+
+    <LinearLayout
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:layout_marginStart="12dp"
+      android:orientation="vertical">
+
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:text="WAVELENGTH"
+          android:textColor="#99FFFFFF"
+          android:textSize="9sp"
+          android:letterSpacing="0.2"
+          android:fontFamily="sans-serif-medium"/>
+
+        <TextView
+          android:id="@+id/widget_state"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Paused"
+          android:textColor="#80FFFFFF"
+          android:textSize="9sp"
+          android:letterSpacing="0.06"
+          android:fontFamily="sans-serif-medium"/>
+      </LinearLayout>
+
+      <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Wavelength"
+        android:textColor="#FFFFFFFF"
+        android:textSize="16sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+
+      <TextView
+        android:id="@+id/widget_artist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:text="Tap to open"
+        android:textColor="#B3FFFFFF"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+
+      <TextView
+        android:id="@+id/widget_album"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:text=""
+        android:textColor="#80FFFFFF"
+        android:textSize="11sp"
+        android:textStyle="italic"
+        android:maxLines="1"
+        android:ellipsize="end"/>
+    </LinearLayout>
+  </LinearLayout>
 
   <LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="8dp"
+    android:layout_marginTop="6dp"
     android:orientation="horizontal"
     android:gravity="center_vertical">
 
@@ -244,6 +307,15 @@ cat > "$PROJECT/app/src/main/res/drawable/widget_bg.xml" <<'EOF'
 </shape>
 EOF
 
+cat > "$PROJECT/app/src/main/res/drawable/widget_art_bg.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+  android:shape="rectangle">
+  <corners android:radius="18dp"/>
+  <solid android:color="#1FFFFFFF"/>
+</shape>
+EOF
+
 cat > "$PROJECT/app/src/main/res/drawable/widget_play_bg.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -275,6 +347,15 @@ cat > "$PROJECT/app/src/main/res/values/styles.xml" <<'EOF'
     <item name="android:statusBarColor">#000000</item>
     <item name="android:navigationBarColor">#000000</item>
   </style>
+  <style name="Theme.NowPlaying" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">#000000</item>
+    <item name="android:windowNoTitle">true</item>
+    <item name="android:windowFullscreen">true</item>
+    <item name="android:windowShowWallpaper">false</item>
+    <item name="android:statusBarColor">#000000</item>
+    <item name="android:navigationBarColor">#000000</item>
+    <item name="android:windowAnimationStyle">@android:style/Animation.Activity</item>
+  </style>
 </resources>
 EOF
 
@@ -282,6 +363,8 @@ EOF
 cp "$ROOT/scripts/android/MainActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/MainActivity.java"
 cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/wavelength/music/PlaybackService.java"
 cp "$ROOT/scripts/android/WavelengthWidget.java" "$PROJECT/app/src/main/java/app/wavelength/music/WavelengthWidget.java"
+cp "$ROOT/scripts/android/NowPlayingActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/NowPlayingActivity.java"
+cp "$ROOT/scripts/android/VizView.java" "$PROJECT/app/src/main/java/app/wavelength/music/VizView.java"
 
 mkdir -p "$ROOT/dist"
 

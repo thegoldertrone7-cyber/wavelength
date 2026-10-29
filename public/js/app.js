@@ -25,6 +25,10 @@ const localBadge = t => t && t.localId
   : '';
 
 const NATIVE = typeof window.AndroidBridge !== 'undefined';
+const nativeLockAllowed = () => {
+  if (!NATIVE) return true;
+  try { return !!window.AndroidBridge.lockScreenAllowed(); } catch { return true; }
+};
 function syncSystemBars() {
   if (!NATIVE) return;
   const theme = S.settings.theme;
@@ -156,7 +160,7 @@ function rememberSearch(q) {
 }
 
 /* ═════════ state ═════════ */
-const DEF = { playlists: [], liked: [], history: [], listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list' } };
+const DEF = { playlists: [], liked: [], history: [], listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list' } };
 let S = structuredClone(DEF);
 const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null, playCtx: '', viewList: null, recapYear: new Date().getFullYear(), recapFrom: '', recapTo: '', infoCache: {}, credits: null, creditDone: '', listenTick: 0, normGain: 1, normReady: 0, remix: null };
 let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api('/api/state', { method: 'PUT', json: S }).catch(() => {}), 400); };
@@ -494,6 +498,7 @@ function applyTheme() {
   cachePrefs();
   VC.accent = a;
   VC.dim = getComputedStyle(root).getPropertyValue('--dot').trim() || VC.dim;
+  syncNativePrefs();
   const meta = $('meta[name=theme-color]');
   if (meta) meta.content = getComputedStyle(root).getPropertyValue('--bg').trim();
   syncSystemBars();
@@ -1183,11 +1188,18 @@ function vSet() {
       <div class="read-demo"><b>Readable by default</b><span>Artist names, labels and small print get extra breathing room at larger sizes.</span></div></div>
     <div class="box rise" style="--i:2" id="set-feel"><h2>Motion &amp; sound</h2><p class="mut">Keep movement fluid without leaving effects running in the background.</p>
       <div class="line"><div><div class="l">Motion</div><div class="s">Reduce transitions and visual movement across the app.</div></div><select class="inp" data-set="motion" aria-label="Motion preference"><option value="system"${s.motion === 'reduced' ? '' : ' selected'}>Match system</option><option value="reduced"${s.motion === 'reduced' ? ' selected' : ''}>Reduced</option></select></div>
-      ${NATIVE ? '' : `${tg('viz', 'Show in full-screen player', 'Reacts to the real audio, not a fake animation.')}
-      <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>`}</div>
+      ${tg('viz', 'Show visualizer', NATIVE
+        ? 'Follows playback on the phone. Android does not expose the WebView’s audio samples, so the motion is generated from the track and the playback clock.'
+        : 'Reacts to the real audio, not a fake animation.')}
+      <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>
+      <div class="line"><div><div class="l">Visualizer size</div><div class="s">Full screen turns the visualizer into the backdrop of the player.</div></div><select class="inp" data-set="vizSize" aria-label="Visualizer size">${[['sm', 'Small'], ['md', 'Medium'], ['lg', 'Large'], ['full', 'Full screen']].map(([v, n]) => `<option value="${v}"${(s.vizSize || 'md') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      ${NATIVE ? `${tg('lockVisualizer', 'Lock-screen now playing', 'When you lock the phone during playback, Wavelength briefly shows the artwork, the song and a visualizer over the lock screen.')}
+      <div class="line"><div><div class="l">Lock-screen preview</div><div class="s">Open the brief now-playing screen without locking the phone.</div></div><button class="btn" data-act="preview-lock">Preview</button></div>
+      ${nativeLockAllowed() ? '' : `<div class="line"><div><div class="l">Allow lock-screen display</div><div class="s">Android needs permission before an app can appear over the lock screen.</div></div><button class="btn" data-act="allow-lockscreen">Allow</button></div>`}` : ''}</div>
     <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs. Never used while shuffle is on.')}
       ${NATIVE ? '' : tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
+      ${NATIVE ? `<div class="line"><div><div class="l">Volume</div><div class="s">Controls the phone’s media volume, the same stream the hardware keys change.</div></div><input class="inp range" type="range" min="0" max="100" step="1" value="${Math.round((s.volume || 0) * 100)}" data-volset aria-label="Volume"></div>` : ''}
       ${NATIVE ? `<div class="line"><div><div class="l">Smart volume</div><div class="s">Not available on Android yet. This build plays YouTube audio directly, outside the Web Audio graph used for loudness balancing.</div></div><span class="meta">Desktop / browser</span></div>` : tg('smartVolume', 'Smart volume', 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
       ${tg('skipCredits', 'Skip credits &amp; outros', 'Best effort. Only skips when the video’s own chapter or segment data clearly labels a credits/outro section.')}
       ${tg('headphonesPause', 'Pause when headphones disconnect', NATIVE ? 'Android pauses playback when Bluetooth or wired audio disconnects.' : 'Best effort in the browser. Android handles this natively.')}
@@ -1337,14 +1349,57 @@ function smartVolumeTick() {
     normGain.gain.setTargetAtTime(R.normGain, actx.currentTime, 0.3);
   } catch {}
 }
+/* ── volume ─────────────────────────────────────────────────────────── */
+/* Desktop and the browser attenuate the graph. Android uses the phone's media
+   stream instead, so the slider, hardware keys and the system panel all agree.
+   `mediaMax` is the phone's step count, used to round fractions to real levels. */
+let mediaMax = 0;
+function readMediaVolume() {
+  if (!NATIVE) return null;
+  try {
+    const raw = window.AndroidBridge.mediaVolume();
+    if (!raw) return null;
+    const info = JSON.parse(raw);
+    if (!info || !(info.max > 0)) return null;
+    mediaMax = info.max;
+    return Math.min(1, Math.max(0, info.level / info.max));
+  } catch { return null; }
+}
+function writeMediaVolume(f) {
+  if (!NATIVE) return false;
+  try { return window.AndroidBridge.setMediaVolume(f) === true; } catch { return false; }
+}
+/* Hardware keys reach us here. Do not call applyVol(): that would write the
+   same level back to the system and fight the key press. */
+window.wlMediaVolume = (level, max) => {
+  if (!NATIVE || !(max > 0)) return;
+  mediaMax = max;
+  const f = Math.min(1, Math.max(0, level / max));
+  S.settings.volume = f;
+  R.muted = f === 0;
+  paintVol();
+};
+function paintVol() {
+  const pct = Math.round((R.muted ? 0 : S.settings.volume) * 100);
+  $$('.js-vol-fill').forEach(el => { el.style.width = pct + '%'; });
+  $$('[data-vol]').forEach(el => {
+    el.setAttribute('aria-valuenow', pct);
+    el.setAttribute('aria-valuetext', pct + ' percent');
+  });
+  $$('.js-vol-icon').forEach(el => { el.innerHTML = R.muted || S.settings.volume === 0 ? I.mute : I.vol; });
+  $$('[data-volset]').forEach(el => { el.value = pct; });
+  if (S.settings.volume > 0) lastVolume = S.settings.volume;
+}
 function applyVol() {
   const v = R.muted ? 0 : S.settings.volume;
-  if (gain) gain.gain.value = v; else audioEls.forEach(el => el.volume = v);
-  $('#v-fill').style.width = (R.muted ? 0 : S.settings.volume * 100) + '%';
-  $('#b-mute').innerHTML = R.muted || S.settings.volume === 0 ? I.mute : I.vol;
-  const pct = Math.round((R.muted ? 0 : S.settings.volume) * 100);
-  $$('.vol').forEach(el => { el.setAttribute('aria-valuenow', pct); el.setAttribute('aria-valuetext', pct + ' percent'); });
-  if (S.settings.volume > 0) lastVolume = S.settings.volume;
+  if (NATIVE) {
+    // The phone's media stream is the single volume control. Keep the element
+    // at full scale so the two do not multiply.
+    audioEls.forEach(el => { if (el.volume !== 1) el.volume = 1; });
+    writeMediaVolume(v);
+  } else if (gain) gain.gain.value = v;
+  else audioEls.forEach(el => el.volume = v);
+  paintVol();
 }
 
 /* Sleep timer state lives in settings so it survives reloads and Settings
@@ -1380,6 +1435,32 @@ function syncSleep() {
 let vizRaf = 0, vizLast = 0, vizPrev = 0, vizStep = 0.035, phase = 0, disp = [];
 let vizW = 0, vizH = 0, vizDpr = 1, vizRO = null;
 const VSTYLES = ['matrix', 'bars', 'wave', 'radial'];
+const VIZ_SIZES = ['sm', 'md', 'lg', 'full'];
+/* Android plays through the WebView's native player, which never exposes
+   samples to Web Audio. Instead of freezing, the phone draws a track-seeded
+   spectrum that runs off the playback clock: it moves only while audio plays,
+   changes per song, and stops flat on pause. Desktop/browser still use real
+   analyser data. */
+let vizSeed = 0.31, vizSeedKey = '';
+function vizSeedFor(t) {
+  const key = String((t && (t.ytId || t.localId || t.id || t.title)) || '');
+  if (key === vizSeedKey) return;
+  vizSeedKey = key;
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+  vizSeed = ((h >>> 0) % 10007) / 10007;
+  disp = [];
+}
+function synthLevel(i, n) {
+  const s = vizSeed * 6.283;
+  const t = phase;
+  const tilt = Math.pow(Math.max(0, 1 - i / n), 0.72);
+  const beat = Math.pow(0.5 + 0.5 * Math.sin(t * 3.05 + s), 3);
+  const body = 0.5 + 0.5 * Math.sin(t * 1.31 + i * 0.52 + s * 1.7);
+  const air = 0.5 + 0.5 * Math.sin(t * 2.63 + i * 1.17 + s * 3.1);
+  const dip = 0.5 + 0.5 * Math.sin(t * 0.47 + i * 0.09 + s * 0.8);
+  return Math.min(1, 0.1 + tilt * (0.34 * body + 0.3 * beat) * (0.55 + 0.45 * dip) + 0.16 * air * tilt + 0.06 * beat);
+}
 function vizResize() {
   const c = $('#viz'); if (!c) return;
   const w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight);
@@ -1391,8 +1472,8 @@ function vizResize() {
 function vizLoop(ts) {
   vizRaf = requestAnimationFrame(vizLoop);
   if (document.hidden) return;
-  const live = R.playing && analyser;
-  const fps = motionReduced() ? 15 : live ? 30 : 15;
+  const active = R.playing && (analyser || NATIVE);
+  const fps = motionReduced() ? 15 : active ? 30 : 15;
   if (ts - vizLast < 1000 / fps - 1) return;
   const dt = Math.min(0.09, (ts - (vizPrev || ts)) / 1000);
   vizPrev = ts; vizLast = ts; vizStep = Math.max(0.012, dt * 2.1);
@@ -1401,8 +1482,15 @@ function vizLoop(ts) {
 }
 function vizSync() {
   const open = $('#np').classList.contains('open'), on = open && S.settings.viz;
+  const size = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md';
+  document.documentElement.dataset.vizSize = size;
   $('#viz').style.display = S.settings.viz ? '' : 'none';
   $('#b-viz').textContent = S.settings.vizStyle[0].toUpperCase() + S.settings.vizStyle.slice(1);
+  const full = $('#b-viz-full');
+  if (full) {
+    full.textContent = size === 'full' ? 'Exit full screen' : 'Full screen';
+    full.classList.toggle('solid', size === 'full');
+  }
   if (on && !vizRaf) {
     vizResize();
     if (!vizRO && 'ResizeObserver' in window) { vizRO = new ResizeObserver(vizResize); vizRO.observe($('#viz')); }
@@ -1414,9 +1502,13 @@ function vizSync() {
 function drawViz(c, g) {
   const w = vizW, h = vizH, dpr = vizDpr;
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
-  const live = analyser && R.playing; phase += vizStep;
-  if (live) { analyser.getByteFrequencyData(freq); analyser.getByteTimeDomainData(wave); }
-  const level = (i, n) => live ? Math.min(1, (freq[Math.floor(Math.pow(i / n, 1.55) * freq.length * 0.7) + 1] / 255) * 1.12)
+  const real = !NATIVE && analyser && R.playing;
+  const synth = NATIVE && R.playing;
+  vizSeedFor(R.cur);
+  phase += vizStep;
+  if (real) { analyser.getByteFrequencyData(freq); analyser.getByteTimeDomainData(wave); }
+  const level = (i, n) => real ? Math.min(1, (freq[Math.floor(Math.pow(i / n, 1.55) * freq.length * 0.7) + 1] / 255) * 1.12)
+    : synth ? synthLevel(i, n)
     : 0.06 + 0.04 * Math.sin(phase * 2 + i * 0.55);
   const ease = (i, v) => (disp[i] = (disp[i] ?? v) + (v - (disp[i] ?? v)) * 0.32);
   const st = S.settings.vizStyle; g.fillStyle = g.strokeStyle = VC.accent;
@@ -1437,9 +1529,12 @@ function drawViz(c, g) {
       g.beginPath(); g.roundRect(x, h - bh, bw * 0.6, bh, rr); g.fill();
     }
   } else if (st === 'wave') {
+    const amp = synth ? 0.08 + 0.34 * Math.pow(0.5 + 0.5 * Math.sin(phase * 3.05 + vizSeed * 6.283), 2) : 0;
     g.lineWidth = 3; g.lineCap = g.lineJoin = 'round'; g.shadowColor = VC.accent; g.shadowBlur = 14; g.beginPath();
     for (let x = 0; x <= w; x += 3) {
-      const v = live ? (wave[Math.floor(x / w * (wave.length - 1))] - 128) / 128 : Math.sin(x / 38 + phase * 2) * 0.08;
+      const v = real ? (wave[Math.floor(x / w * (wave.length - 1))] - 128) / 128
+        : synth ? Math.sin(x / w * 21 + phase * 3.1) * amp * (0.55 + 0.45 * Math.sin(x / w * 4.7 + phase * 0.8))
+        : Math.sin(x / 38 + phase * 2) * 0.08;
       const y = h / 2 + v * h * 0.46; x ? g.lineTo(x, y) : g.moveTo(x, y);
     }
     g.stroke(); g.shadowBlur = 0;
@@ -2089,8 +2184,20 @@ function seekPreview(f, final) {
 let lastVolume = 0.8;
 function setVol(f) {
   f = Math.min(1, Math.max(0, +f || 0));
+  // Match the phone's real step count so the slider never claims a level the
+  // media stream cannot hold.
+  if (NATIVE && mediaMax > 0) f = f === 0 ? 0 : Math.max(1 / mediaMax, Math.round(f * mediaMax) / mediaMax);
   if (f > 0) lastVolume = f;
   S.settings.volume = f; R.muted = false; applyVol(); save();
+}
+function toggleMute() {
+  if (R.muted || S.settings.volume === 0) {
+    R.muted = false;
+    S.settings.volume = lastVolume || 0.8;
+  } else {
+    R.muted = true;
+  }
+  applyVol(); save(); haptic(10);
 }
 function mediaSession() {
   if (!R.cur) return;
@@ -2159,6 +2266,15 @@ async function watchAudioOutputs() {
 function syncNativePrefs() {
   if (!NATIVE) return;
   try { window.AndroidBridge.setHeadphonesPause(!!S.settings.headphonesPause); } catch {}
+  try {
+    window.AndroidBridge.setVisualizerPrefs(
+      S.settings.vizStyle || 'matrix',
+      S.settings.vizSize || 'md',
+      !!S.settings.viz,
+      !!S.settings.lockVisualizer,
+      VC.accent || '#d71921'
+    );
+  } catch {}
 }
 
 /* Commands from the lock screen, Bluetooth headset and notification. */
@@ -2799,12 +2915,25 @@ const acts = {
     toast(R.shuffle ? 'Shuffle on · stays inside this list' : 'Shuffle off');
   },
   repeat: () => { R.repeat = (R.repeat + 1) % 3; $$('[data-act=repeat]').forEach(b => { b.innerHTML = R.repeat === 2 ? I.repeat1 : I.repeat; b.classList.toggle('on', R.repeat > 0); }); toast(['Repeat off', 'Repeat all', 'Repeat one'][R.repeat]); },
-  mute: () => { R.muted = !R.muted; applyVol(); },
+  mute: () => toggleMute(),
   queue: () => { renderQueue(); $('#queue').classList.toggle('open'); },
   qclear: () => { R.queue = R.cur ? [R.cur] : []; R.idx = R.cur ? 0 : -1; refreshQueue(); renderQueue(); saveSession(true); },
   qrm: el => { const i = +el.dataset.i; R.queue.splice(i, 1); if (i <= R.idx) R.idx--; refreshQueue(); renderQueue(); saveSession(true); },
   np: toggleNP,
-  'viz-style': () => { S.settings.vizStyle = VSTYLES[(VSTYLES.indexOf(S.settings.vizStyle) + 1) % VSTYLES.length]; save(); vizSync(); },
+  'viz-style': () => { S.settings.vizStyle = VSTYLES[(VSTYLES.indexOf(S.settings.vizStyle) + 1) % VSTYLES.length]; save(); vizSync(); syncNativePrefs(); },
+  'viz-full': () => {
+    if (S.settings.vizSize === 'full') S.settings.vizSize = S.settings.vizSizePrev || 'md';
+    else { S.settings.vizSizePrev = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md'; S.settings.vizSize = 'full'; S.settings.viz = true; }
+    save(); vizSync(); syncNativePrefs();
+  },
+  'preview-lock': () => {
+    try { window.AndroidBridge.previewLockScreen(); }
+    catch { toast('The lock-screen view is Android only'); }
+  },
+  'allow-lockscreen': () => {
+    try { window.AndroidBridge.openLockScreenSettings(); }
+    catch { toast('Open Android settings to allow lock-screen display'); }
+  },
   like: el => { const t = rowTrack(el); if (t) toggleLike(t); },
   menu: el => { const r = el.closest('.row'), b = el.getBoundingClientRect(); openMenu(r.dataset.ctx, +r.dataset.i, b.left - 190, b.bottom + 6); },
   playhist: el => play(S.history, +el.dataset.i, 'history'), playliked: () => S.liked.length && play(S.liked, 0, 'liked'),
@@ -3028,7 +3157,8 @@ const acts = {
   accent: el => { S.settings.accent = el.dataset.c; applyTheme(); save(); draw(); }, 'accent-reset': () => { S.settings.accent = null; applyTheme(); save(); draw(); },
   tg: el => {
     const k = el.dataset.k; S.settings[k] = !S.settings[k]; el.classList.toggle('on', S.settings[k]); save();
-    if (k === 'viz') vizSync();
+    if (k === 'viz') { vizSync(); syncNativePrefs(); }
+    if (k === 'lockVisualizer') syncNativePrefs();
     if (k === 'contrast') applyReading();
     if (k === 'resume' && !S.settings.resume) clearSession();
     if (k === 'gapless') { if (S.settings.gapless) schedulePrepare(500); else cancelPrepared(); }
@@ -3078,6 +3208,11 @@ document.addEventListener('pointerout', e => {
   if (r && r === hoverRow && !r.contains(e.relatedTarget)) { hoverRow = null; clearTimeout(hoverT); }
 });
 
+document.addEventListener('input', e => {
+  const el = e.target.closest('[data-volset]'); if (!el) return;
+  setVol(+el.value / 100);
+});
+
 document.addEventListener('change', e => {
   if (e.target.id === 'sp-order') { updateListCount(); return; }
   const el = e.target.closest('[data-set]'); if (!el) return; const k = el.dataset.set;
@@ -3090,7 +3225,8 @@ document.addEventListener('change', e => {
     return;
   }
   if (k === 'motion') { S.settings.motion = el.value; applyMotion(); save(); vizSync(); return; }
-  S.settings[k] = k === 'quality' ? +el.value : el.value; save(); if (k === 'vizStyle') vizSync();
+  S.settings[k] = k === 'quality' ? +el.value : el.value; save();
+  if (k === 'vizStyle' || k === 'vizSize') { vizSync(); syncNativePrefs(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'accent-pick') { S.settings.accent = e.target.value; applyTheme(); save(); }
@@ -3114,7 +3250,7 @@ document.addEventListener('wheel', e => {
   setVol((R.muted ? 0 : S.settings.volume) - Math.sign(e.deltaY) * step);
 }, { passive: false });
 document.addEventListener('dblclick', e => {
-  if (e.target.closest('[data-vol]')) { R.muted = !R.muted; applyVol(); haptic(10); }
+  if (e.target.closest('[data-vol]')) toggleMute();
   else if (e.target.closest('#p-art,#p-meta')) toggleNP();
 });
 
@@ -3216,7 +3352,7 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'ArrowDown') { e.preventDefault(); setVol(S.settings.volume - 0.05); }
   else if (e.code === 'KeyN') { if (canNext()) next(); }
   else if (e.code === 'KeyP') prev();
-  else if (e.code === 'KeyM') { R.muted = !R.muted; applyVol(); }
+  else if (e.code === 'KeyM') toggleMute();
   else if (e.code === 'KeyL') { if (R.cur) toggleLike(R.cur); }
   else if (e.code === 'KeyS') acts.shuffle();
   else if (e.code === 'KeyR') acts.repeat();
@@ -3236,6 +3372,12 @@ addEventListener('pagehide', () => { flushListening(); api('/api/state', { metho
 (async function boot() {
   $$('[data-ic]').forEach(e => e.innerHTML = I[e.dataset.ic]); buildDm();
   try { const st = await api('/api/state'); if (st) S = { ...DEF, ...st, settings: { ...DEF.settings, ...st.settings } }; } catch {}
+  // On Android the phone owns the volume. Start from the real media level
+  // instead of forcing a stored desktop preference onto the device.
+  if (NATIVE) {
+    const v = readMediaVolume();
+    if (v != null) { S.settings.volume = v; R.muted = v === 0; }
+  }
   if (!S.listening || typeof S.listening !== 'object' || !S.listening.devices || typeof S.listening.devices !== 'object') S.listening = { v: 1, devices: {} };
   if (!Array.isArray(S.settings.blockedArtists)) S.settings.blockedArtists = [];
   if (!SORT_KEYS.some(([k]) => k === S.settings.plSort)) S.settings.plSort = 'added';

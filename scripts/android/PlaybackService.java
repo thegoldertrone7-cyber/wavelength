@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -16,13 +17,14 @@ import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
-import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
 
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.ExecutorService;
@@ -38,7 +40,9 @@ import java.util.concurrent.Executors;
  */
 public class PlaybackService extends Service {
     static final String CHANNEL = "wavelength_playback";
+    static final String CHANNEL_LOCK = "wavelength_lockscreen";
     static final int NOTIFICATION_ID = 30421;
+    static final int LOCK_NOTIFICATION_ID = 30422;
     static final String ACTION_METADATA = "app.wavelength.music.METADATA";
     static final String ACTION_STATE = "app.wavelength.music.STATE";
     static final String ACTION_COMMAND = "app.wavelength.music.COMMAND";
@@ -49,6 +53,10 @@ public class PlaybackService extends Service {
     static final String EXTRA_DURATION = "duration";
     static final String EXTRA_COMMAND = "command";
     static final String EXTRA_ARG = "arg";
+
+    /* Snapshot used by the lock-screen view, so it can still draw the last
+       track when the service is gone. */
+    static final String PREFS_NOW = "wl_now";
 
     private static PlaybackService instance;
 
@@ -68,8 +76,12 @@ public class PlaybackService extends Service {
 
     private String widgetTitle = "";
     private String widgetArtist = "";
+    private String widgetAlbum = "";
     private boolean widgetPlaying = false;
+    private int artVersion = 0;
+    private int widgetArtVersion = -1;
     private boolean noisyRegistered = false;
+    private boolean screenRegistered = false;
 
     /* Android tells us when the active audio route disappears (Bluetooth
        headset off, headphones unplugged). Pause instead of blasting the phone
@@ -83,6 +95,21 @@ public class PlaybackService extends Service {
             boolean pause = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
                 .getBoolean("headphones_pause", true);
             if (pause) send("pause", 0);
+        }
+    };
+
+    /* Turning the screen off while music plays is the moment the lock-screen
+       view is for. A full-screen intent is the only way Android lets a media
+       app surface an activity over the keyguard without asking for the
+       draw-over-other-apps permission. */
+    private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) return;
+            if (!playing || title.isEmpty()) return;
+            SharedPreferences p = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+            if (!p.getBoolean("lockscreen_show", true)) return;
+            showLockScreen(PlaybackService.this);
         }
     };
 
@@ -141,6 +168,48 @@ public class PlaybackService extends Service {
         }
     }
 
+    /** Detached copy of what is playing, for the lock-screen activity. */
+    static final class Snapshot {
+        final String title;
+        final String artist;
+        final String album;
+        final boolean playing;
+        final long position;
+        final long duration;
+        final Bitmap art;
+
+        Snapshot(String title, String artist, String album, boolean playing,
+                 long position, long duration, Bitmap art) {
+            this.title = title == null ? "" : title;
+            this.artist = artist == null ? "" : artist;
+            this.album = album == null ? "" : album;
+            this.playing = playing;
+            this.position = Math.max(0, position);
+            this.duration = Math.max(0, duration);
+            this.art = art;
+        }
+    }
+
+    static Snapshot snapshot(Context context) {
+        PlaybackService s = instance;
+        if (s != null) {
+            return new Snapshot(s.title, s.artist, s.album, s.playing, s.position, s.duration, s.art);
+        }
+        SharedPreferences p = context.getSharedPreferences(PREFS_NOW, Context.MODE_PRIVATE);
+        return new Snapshot(
+            p.getString("title", ""),
+            p.getString("artist", ""),
+            p.getString("album", ""),
+            p.getBoolean("playing", false),
+            p.getLong("position", 0),
+            p.getLong("duration", 0),
+            null);
+    }
+
+    static File artFile(Context context) {
+        return new File(context.getFilesDir(), WavelengthWidget.ART_FILE);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -148,6 +217,7 @@ public class PlaybackService extends Service {
         artPool = Executors.newSingleThreadExecutor();
         notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         createChannel();
+        createLockChannel();
         session = new MediaSession(this, "Wavelength");
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
             | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
@@ -164,6 +234,10 @@ public class PlaybackService extends Service {
         try {
             registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
             noisyRegistered = true;
+        } catch (Exception ignored) {}
+        try {
+            registerReceiver(screenReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+            screenRegistered = true;
         } catch (Exception ignored) {}
     }
 
@@ -200,6 +274,10 @@ public class PlaybackService extends Service {
             try { unregisterReceiver(noisyReceiver); } catch (Exception ignored) {}
             noisyRegistered = false;
         }
+        if (screenRegistered) {
+            try { unregisterReceiver(screenReceiver); } catch (Exception ignored) {}
+            screenRegistered = false;
+        }
         if (session != null) {
             session.setActive(false);
             session.release();
@@ -219,6 +297,18 @@ public class PlaybackService extends Service {
         notificationManager.createNotificationChannel(channel);
     }
 
+    private void createLockChannel() {
+        if (Build.VERSION.SDK_INT < 26 || notificationManager == null) return;
+        NotificationChannel channel = new NotificationChannel(
+            CHANNEL_LOCK, "Lock-screen now playing", NotificationManager.IMPORTANCE_HIGH);
+        channel.setDescription("Briefly shows the current song over the lock screen");
+        channel.setShowBadge(false);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        channel.setSound(null, null);
+        channel.enableVibration(false);
+        notificationManager.createNotificationChannel(channel);
+    }
+
     private void setMetadata(String json) {
         if (json == null || json.isEmpty()) return;
         try {
@@ -234,6 +324,7 @@ public class PlaybackService extends Service {
             artUrl = nextArt;
             if (artChanged) {
                 art = null;
+                artVersion++;
                 loadArt(nextArt);
             }
             applyMetadata();
@@ -263,18 +354,42 @@ public class PlaybackService extends Service {
             session.setPlaybackState(b.build());
             session.setActive(true);
         }
+        if (!playing && notificationManager != null) {
+            notificationManager.cancel(LOCK_NOTIFICATION_ID);
+        }
         updateNotification();
         publishWidget();
     }
 
-    /* The widget only shows title, artist and play state, so avoid redraws on
-       every one-second position update. */
+    /* The widget shows title, artist, album and play state, so avoid redraws on
+       every one-second position update. Artwork arrival forces one redraw. */
     private void publishWidget() {
-        if (title.equals(widgetTitle) && artist.equals(widgetArtist) && playing == widgetPlaying) return;
+        if (title.equals(widgetTitle) && artist.equals(widgetArtist)
+            && album.equals(widgetAlbum) && playing == widgetPlaying
+            && artVersion == widgetArtVersion) {
+            saveNowSnapshot();
+            return;
+        }
         widgetTitle = title;
         widgetArtist = artist;
+        widgetAlbum = album;
         widgetPlaying = playing;
-        WavelengthWidget.publish(this, title, artist, playing);
+        widgetArtVersion = artVersion;
+        WavelengthWidget.publish(this, title, artist, album, playing);
+        saveNowSnapshot();
+    }
+
+    private void saveNowSnapshot() {
+        try {
+            getSharedPreferences(PREFS_NOW, MODE_PRIVATE).edit()
+                .putString("title", title)
+                .putString("artist", artist)
+                .putString("album", album)
+                .putBoolean("playing", playing)
+                .putLong("position", position)
+                .putLong("duration", duration)
+                .apply();
+        } catch (Exception ignored) {}
     }
 
     private void applyMetadata() {
@@ -310,14 +425,47 @@ public class PlaybackService extends Service {
                 Bitmap bitmap = BitmapFactory.decodeStream(conn.getInputStream());
                 if (bitmap == null) return;
                 if (!wanted.equals(artUrl)) return;
-                art = bitmap;
+                art = scaleArt(bitmap, 512);
+                saveArt(art);
+                artVersion++;
                 applyMetadata();
                 updateNotification();
+                publishWidget();
             } catch (Exception ignored) {
             } finally {
                 if (conn != null) conn.disconnect();
             }
         });
+    }
+
+    /* The widget and the lock-screen view read this file, so artwork survives a
+       process restart and never has to be downloaded twice. */
+    private void saveArt(Bitmap bitmap) {
+        if (bitmap == null) return;
+        File file = artFile(this);
+        File tmp = new File(file.getPath() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out);
+            out.flush();
+        } catch (Exception ignored) {
+            tmp.delete();
+            return;
+        }
+        if (!tmp.renameTo(file)) {
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out);
+            } catch (Exception ignored) {}
+            tmp.delete();
+        }
+    }
+
+    private static Bitmap scaleArt(Bitmap src, int max) {
+        int w = src.getWidth(), h = src.getHeight();
+        if (w <= 0 || h <= 0) return src;
+        float scale = Math.min(1f, (float) max / Math.max(w, h));
+        if (scale >= 1f) return src;
+        return Bitmap.createScaledBitmap(src, Math.max(1, Math.round(w * scale)),
+            Math.max(1, Math.round(h * scale)), true);
     }
 
     private void ensureForeground() {
@@ -371,6 +519,39 @@ public class PlaybackService extends Service {
         return b.build();
     }
 
+    /* Full-screen reminder: shows artwork, title and the visualizer over the
+       lock screen for a few seconds after the screen goes off. */
+    private void showLockScreen(Context context) {
+        if (notificationManager == null) return;
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) b = new Notification.Builder(context, CHANNEL_LOCK);
+        else b = new Notification.Builder(context);
+        b.setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title.isEmpty() ? "Wavelength" : title)
+            .setContentText(artist.isEmpty() ? album : artist + " · " + album)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setCategory(Notification.CATEGORY_TRANSPORT)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent())
+            .setFullScreenIntent(nowPlayingIntent(), true)
+            .setTimeoutAfter(12000);
+        if (art != null) b.setLargeIcon(art);
+        try {
+            notificationManager.notify(LOCK_NOTIFICATION_ID, b.build());
+        } catch (Exception ignored) {}
+    }
+
+    private PendingIntent nowPlayingIntent() {
+        Intent i = new Intent(this, NowPlayingActivity.class)
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getActivity(this, 31, i, flags);
+    }
+
     private PendingIntent contentIntent() {
         Intent i = new Intent(this, MainActivity.class)
             .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -398,8 +579,12 @@ public class PlaybackService extends Service {
         playing = false;
         widgetTitle = "";
         widgetArtist = "";
+        widgetAlbum = "";
         widgetPlaying = false;
+        widgetArtVersion = -1;
+        artVersion++;
         WavelengthWidget.clear(this);
+        if (notificationManager != null) notificationManager.cancel(LOCK_NOTIFICATION_ID);
         if (session != null) {
             session.setActive(false);
         }

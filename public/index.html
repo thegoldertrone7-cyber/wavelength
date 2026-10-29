@@ -64,8 +64,8 @@
   <div class="p-right">
     <button class="ib" data-act="queue" data-ic="queue" title="Queue"></button>
     <button class="ib" data-act="np" data-ic="expand" title="Full screen"></button>
-    <button class="ib" data-act="mute" id="b-mute" title="Mute (M)"></button>
-    <div class="dtw vol" data-vol role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" aria-valuetext="80 percent"><div class="dt"><i id="v-fill"></i></div></div>
+    <button class="ib js-vol-icon" data-act="mute" id="b-mute" title="Mute (M)"></button>
+    <div class="dtw vol" data-vol role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" aria-valuetext="80 percent"><div class="dt"><i id="v-fill" class="js-vol-fill"></i></div></div>
   </div>
 </footer>
 
@@ -76,6 +76,10 @@
   <div class="np-meta"><h2 id="np-title">Nothing playing</h2><p id="np-artist"></p><button class="ib np-like" data-act="like" data-ic="heart" title="Like current song (L)" aria-label="Like current song"></button></div>
   <canvas id="viz"></canvas>
   <div class="prog wide"><span class="tm t-cur">0:00</span><div class="dtw" data-seek role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
+  <div class="np-vol">
+    <button class="ib js-vol-icon" data-act="mute" title="Mute (M)" aria-label="Mute"></button>
+    <div class="dtw vol" data-vol role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" aria-valuetext="80 percent"><div class="dt"><i class="js-vol-fill"></i></div></div>
+  </div>
   <div class="ctl">
     <button class="ib" data-act="shuffle" data-ic="shuffle" title="Shuffle"></button>
     <button class="ib lg" data-act="prev" data-ic="prev" title="Previous"></button>
@@ -83,7 +87,7 @@
     <button class="ib lg" data-act="next" data-ic="next" title="Next"></button>
     <button class="ib" data-act="repeat" data-ic="repeat" title="Repeat"></button>
   </div>
-  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="queue">Queue</button></div>
+  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="viz-full" id="b-viz-full">Full screen</button><button class="btn" data-act="queue">Queue</button></div>
 </section>
 
 <aside class="queue card" id="queue">
