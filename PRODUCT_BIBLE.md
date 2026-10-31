@@ -10,14 +10,14 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.0** | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Android APK | **v2.4.1** | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.1 tree** | Runs through the bundled Node server |
 
-`v2.4.0` ships every platform: macOS universal DMG, Windows installer, Linux AppImage, Flatpak
-and the Android APK. The desktop builds are unsigned. A v2.4.1 Android build adds **Find devices**,
-Android **Smart volume** and the full-screen volume meter; it is built locally and not published
-yet. This document describes shipped behaviour first and future direction second.
+`v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
+arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
+Android **Smart volume** and the full-screen volume meter. This document describes shipped
+behaviour first and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -1031,7 +1031,7 @@ cloud product.
 - The same palette/style/reading/motion system.
 - Icon, emoji, and tone playlist covers.
 
-**Current source build (v2.4.1 tree)**
+**Shipped in v2.4.1**
 
 - Merge data on guest and host, with host recovery after a replacement.
 - Listening stats per device, merged through sync.
@@ -1095,7 +1095,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The published installers are all v2.4.0.** The desktop builds are unsigned, so macOS and
+8. **The published installers are all v2.4.1.** The desktop builds are unsigned, so macOS and
    Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1119,9 +1119,9 @@ These are repeated in the interface and should remain true in every future relea
   Linux (AppImage and Flatpak) and Android.
 - **v2.4.1** — Find devices on the Devices screen, automatic correction when a copied player
   address is used for sync, Smart volume on Android (native sample, attenuation only), and a
-  full-screen volume meter on every installer.
-  Unreleased until the build is published.
-- All published installers are on **v2.4.0**.
+  full-screen volume meter on every installer. Ships on macOS, Windows, Linux (AppImage for x64
+  and arm64, and Flatpak) and Android.
+- All published installers are on **v2.4.1**.
 
 ### 12.2 Phase 1 — Stabilise the instrument
 
