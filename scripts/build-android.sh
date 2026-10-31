@@ -365,6 +365,7 @@ cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/
 cp "$ROOT/scripts/android/WavelengthWidget.java" "$PROJECT/app/src/main/java/app/wavelength/music/WavelengthWidget.java"
 cp "$ROOT/scripts/android/NowPlayingActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/NowPlayingActivity.java"
 cp "$ROOT/scripts/android/VizView.java" "$PROJECT/app/src/main/java/app/wavelength/music/VizView.java"
+cp "$ROOT/scripts/android/LoudnessAnalyzer.java" "$PROJECT/app/src/main/java/app/wavelength/music/LoudnessAnalyzer.java"
 
 mkdir -p "$ROOT/dist"
 

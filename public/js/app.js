@@ -999,12 +999,41 @@ function syncWhen(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 let mergeBusy = false, mergePreview = null;
+/* ── device finding ──────────────────────────────────────────────────
+   The Android bridge answers asynchronously through wlDiscovery(); browser
+   and desktop mode ask the local server, which runs the same UDP probe. */
+let finding = false, findTimer = null;
+function endSyncFind() {
+  finding = false;
+  clearTimeout(findTimer); findTimer = null;
+  const btn = document.querySelector('[data-act="sync-find"]');
+  if (btn) btn.disabled = false;
+}
+function showSyncHosts(hosts, note) {
+  const box = $('#sync-found'); if (!box) return;
+  const list = Array.isArray(hosts) ? hosts.filter(h => h && h.url) : [];
+  if (!list.length) {
+    box.innerHTML = `<div class="sync-found-empty">${esc(note || 'No devices found. Make sure the computer is hosting and both devices are on the same Wi-Fi.')}</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="set-label">Found on this network</div>${list.map(h => `<button class="sync-url found" data-act="sync-pick" data-url="${esc(h.url)}"><span><b>${esc(h.name || 'Wavelength')}</b><small>${esc(h.url)}${h.version ? ' · v' + esc(String(h.version).replace(/^v/, '')) : ''}</small></span>${I.link}</button>`).join('')}`;
+}
+window.wlDiscovery = raw => {
+  endSyncFind();
+  let data = null;
+  try { data = JSON.parse(raw); } catch {}
+  if (!data) { showSyncHosts([], 'The search did not return a result. Try again, or paste the address by hand.'); return; }
+  showSyncHosts(data.hosts);
+};
 function syncHTML() {
   const s = R.sync;
   if (!s) return '<div class="sync-loading"><i></i>Reading device sync…</div>';
   const pc = s.counts?.playlists ?? 0, tc = s.counts?.tracks ?? 0, lc = s.counts?.liked ?? 0;
   const countLine = `<div class="sync-counts"><span><b>${pc}</b> ${pc === 1 ? 'playlist' : 'playlists'}</span><span><b>${tc}</b> ${tc === 1 ? 'song' : 'songs'}</span><span><b>${lc}</b> liked</span></div>`;
   const err = s.error ? `<div class="sync-error" role="status">${esc(s.error)}</div>` : '';
+  const joinPort = s.port > 1 ? s.port : 38422;
+  const joinForm = `<div class="sync-form"><input class="inp" id="sync-url" placeholder="http://192.168.1.20:${joinPort}" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><div class="sync-actions"><button class="btn" data-act="sync-join">Connect</button><button class="btn" data-act="sync-find">${I.search}Find devices</button></div></div>
+    <div class="sync-found" id="sync-found" aria-live="polite"></div>`;
   if (s.role === 'host') {
     const urls = s.urls || [];
     return `<div class="sync-hero"><div><span class="sync-badge on"><i></i>Hosting on this device</span><h3>Your library is available to paired devices.</h3><p class="mut">Keep Wavelength open while other devices sync. Use Tailscale on both devices, or join over the same Wi-Fi.</p></div><button class="btn" data-act="sync-stop">Stop hosting</button></div>
@@ -1028,14 +1057,15 @@ function syncHTML() {
   if (NATIVE) {
     return `<div class="sync-hero"><div><span class="sync-badge"><i></i>Not set up</span><h3>This phone is its own music player.</h3><p class="mut">Join your computer's Wavelength host when you want to carry a library across devices. The computer is only needed during a sync.</p></div></div>
       ${err}
-      <div class="sync-panel"><div class="eyebrow">Join a host</div><h3>Use the computer's library</h3><p class="mut">In Wavelength on the computer, open Settings → Devices, start hosting, then enter its address and pairing code below.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://192.168.1.20:38421" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
+      <div class="sync-panel"><div class="eyebrow">Join a host</div><h3>Use the computer's library</h3><p class="mut">In Wavelength on the computer, open Settings → Devices, start hosting, then tap Find devices. You can also type the address and pairing code below.</p>${joinForm}
+      <p class="meta sync-note">Find devices works over the same Wi‑Fi. For Tailscale, paste the computer's <code>100.x</code> address instead.</p></div></div>
       <p class="meta sync-note">Songs stream directly on the phone. Syncing only copies playlists, liked songs and history; it does not need the computer to stay on.</p>`;
   }
   return `<div class="sync-hero"><div><span class="sync-badge"><i></i>Not set up</span><h3>Keep your library in step across Mac, Linux and Android.</h3><p class="mut">Choose one always-on device as the host. No account, no central server — just a short pairing code and your local network or Tailscale.</p></div></div>
     ${err}
     <div class="sync-options">
       <div class="sync-panel"><div class="eyebrow">Option one</div><h3>Host here</h3><p class="mut">Publish this device's playlists to a paired device. The host only runs while Wavelength is open.</p><button class="btn solid" data-act="sync-host">${I.link}Start hosting</button></div>
-      <div class="sync-panel"><div class="eyebrow">Option two</div><h3>Join a host</h3><p class="mut">Paste the host address and pairing code. Connecting merges this device with the host so neither library is replaced.</p><div class="sync-form"><input class="inp" id="sync-url" placeholder="http://100.x.x.x:${s.port || ''}" spellcheck="false" aria-label="Host address"><input class="inp" id="sync-code" placeholder="Pairing code" spellcheck="false" aria-label="Pairing code" autocomplete="off"><button class="btn" data-act="sync-join">Connect</button></div></div>
+      <div class="sync-panel"><div class="eyebrow">Option two</div><h3>Join a host</h3><p class="mut">Paste the host address and pairing code, or find a host on this network. Connecting merges this device with the host so neither library is replaced.</p>${joinForm}</div>
     </div>`;
 }
 async function applyMerge(selected) {
@@ -1090,7 +1120,7 @@ function accessHTML() {
   return `<div class="access-box">
     <div class="set-label">Phone &amp; browser access</div>
     ${enabled
-      ? `<p class="mut">Open one of these addresses on a phone or another computer on the same network. In the Android app, paste it into the setup screen or tap <b>Find my computer</b>.</p>
+      ? `<p class="mut">Open one of these addresses on a phone or another computer on the same network. In the Android app, open Settings → Devices and tap <b>Find devices</b>.</p>
         <div class="sync-urls">${urls.map(u => `<button class="sync-url" data-act="sync-copy" data-copy="${esc(u)}"><span>${esc(u)}</span>${I.copy}</button>`).join('')}</div>`
       : `<p class="mut">This player is only listening on this computer (127.0.0.1), so a phone cannot reach it yet.</p>
         <p class="mut">In the <b>desktop app</b>, this switches on automatically — reopen Settings → Devices once it has restarted. In browser mode, start the server with <code>HOST=0.0.0.0 ./start.sh</code>.</p>`}
@@ -1200,7 +1230,9 @@ function vSet() {
       ${NATIVE ? '' : tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
       ${NATIVE ? `<div class="line"><div><div class="l">Volume</div><div class="s">Controls the phone’s media volume, the same stream the hardware keys change.</div></div><input class="inp range" type="range" min="0" max="100" step="1" value="${Math.round((s.volume || 0) * 100)}" data-volset aria-label="Volume"></div>` : ''}
-      ${NATIVE ? `<div class="line"><div><div class="l">Smart volume</div><div class="s">Not available on Android yet. This build plays YouTube audio directly, outside the Web Audio graph used for loudness balancing.</div></div><span class="meta">Desktop / browser</span></div>` : tg('smartVolume', 'Smart volume', 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
+      ${tg('smartVolume', 'Smart volume', NATIVE
+        ? 'Samples the start of each song and turns loud songs down a little. It never boosts above your volume, so quiet songs stay quiet. Best-effort, not a studio master.'
+        : 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
       ${tg('skipCredits', 'Skip credits &amp; outros', 'Best effort. Only skips when the video’s own chapter or segment data clearly labels a credits/outro section.')}
       ${tg('headphonesPause', 'Pause when headphones disconnect', NATIVE ? 'Android pauses playback when Bluetooth or wired audio disconnects.' : 'Best effort in the browser. Android handles this natively.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
@@ -1330,8 +1362,8 @@ function ensureGraph() {
 }
 /* Loudness balancing uses the actual waveform, not a lookup table. It nudges
    the gain toward a comfortable RMS while a compressor catches peaks. This is
-   best-effort and does not work in the Android WebView, which bypasses Web
-   Audio for cross-origin streams. */
+   best-effort. Android cannot read Web Audio samples for the remote stream, so
+   it samples the same file natively and only attenuates (see smartGain). */
 function smartVolumeTick() {
   if (NATIVE || !analyser || !normGain || !R.playing || !S.settings.smartVolume) return;
   const now = performance.now();
@@ -1349,6 +1381,46 @@ function smartVolumeTick() {
     normGain.gain.setTargetAtTime(R.normGain, actx.currentTime, 0.3);
   } catch {}
 }
+/* Android smart volume. The native side decodes the first few seconds of the
+   song and answers with a gain in [0.55, 1]. Element volume carries only that
+   attenuation; the phone's media stream stays the user's own volume. */
+const smartGains = new Map();
+let smartGain = 1, smartFade = null;
+function setSmartGain(g, animate = true) {
+  const target = Math.max(0.1, Math.min(1, Number(g) || 1));
+  smartGain = target;
+  if (!NATIVE) return;
+  if (smartFade) { clearInterval(smartFade); smartFade = null; }
+  const apply = v => audioEls.forEach(el => { el.volume = v; });
+  if (!S.settings.smartVolume || R.muted) { apply(1); return; }
+  if (!animate) { apply(target); return; }
+  const from = audio.volume || 1, steps = 6;
+  let step = 0;
+  smartFade = setInterval(() => {
+    step++;
+    apply(from + (target - from) * Math.min(1, step / steps));
+    if (step >= steps) { clearInterval(smartFade); smartFade = null; }
+  }, 60);
+}
+function requestSmartGain(t) {
+  if (!NATIVE || !t || !t.ytId) return;
+  const id = t.ytId;
+  if (!S.settings.smartVolume) { setSmartGain(1, false); return; }
+  if (smartGains.has(id)) { setSmartGain(smartGains.get(id), false); return; }
+  setSmartGain(1, false);
+  setTimeout(() => {
+    if (!S.settings.smartVolume || !R.cur || R.cur.ytId !== id) return;
+    try { window.AndroidBridge.analyzeLoudness(id, S.settings.streamQuality || 'best'); }
+    catch {}
+  }, 900);
+}
+window.wlLoudness = (id, gain) => {
+  if (!id) return;
+  const g = Math.max(0.1, Math.min(1, Number(gain) || 1));
+  smartGains.set(id, g);
+  if (!S.settings.smartVolume || !R.cur || R.cur.ytId !== id) return;
+  setSmartGain(g);
+};
 /* ── volume ─────────────────────────────────────────────────────────── */
 /* Desktop and the browser attenuate the graph. Android uses the phone's media
    stream instead, so the slider, hardware keys and the system panel all agree.
@@ -1393,9 +1465,12 @@ function paintVol() {
 function applyVol() {
   const v = R.muted ? 0 : S.settings.volume;
   if (NATIVE) {
-    // The phone's media stream is the single volume control. Keep the element
-    // at full scale so the two do not multiply.
-    audioEls.forEach(el => { if (el.volume !== 1) el.volume = 1; });
+    // The phone's media stream is the single volume control. The element stays
+    // at full scale except for smart-volume attenuation, so the two do not
+    // multiply the user's slider twice.
+    if (smartFade) { clearInterval(smartFade); smartFade = null; }
+    const g = S.settings.smartVolume ? smartGain : 1;
+    audioEls.forEach(el => { if (Math.abs(el.volume - g) > 0.0001) el.volume = g; });
     writeMediaVolume(v);
   } else if (gain) gain.gain.value = v;
   else audioEls.forEach(el => el.volume = v);
@@ -1451,15 +1526,16 @@ function vizSeedFor(t) {
   vizSeed = ((h >>> 0) % 10007) / 10007;
   disp = [];
 }
-function synthLevel(i, n) {
-  const s = vizSeed * 6.283;
-  const t = phase;
+function synthLevelAt(i, n, t, s) {
   const tilt = Math.pow(Math.max(0, 1 - i / n), 0.72);
   const beat = Math.pow(0.5 + 0.5 * Math.sin(t * 3.05 + s), 3);
   const body = 0.5 + 0.5 * Math.sin(t * 1.31 + i * 0.52 + s * 1.7);
   const air = 0.5 + 0.5 * Math.sin(t * 2.63 + i * 1.17 + s * 3.1);
   const dip = 0.5 + 0.5 * Math.sin(t * 0.47 + i * 0.09 + s * 0.8);
   return Math.min(1, 0.1 + tilt * (0.34 * body + 0.3 * beat) * (0.55 + 0.45 * dip) + 0.16 * air * tilt + 0.06 * beat);
+}
+function synthLevel(i, n) {
+  return synthLevelAt(i, n, phase, vizSeed * 6.283);
 }
 function vizResize() {
   const c = $('#viz'); if (!c) return;
@@ -1482,6 +1558,7 @@ function vizLoop(ts) {
 }
 function vizSync() {
   const open = $('#np').classList.contains('open'), on = open && S.settings.viz;
+  meterSync(open);
   const size = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md';
   document.documentElement.dataset.vizSize = size;
   $('#viz').style.display = S.settings.viz ? '' : 'none';
@@ -1546,6 +1623,72 @@ function drawViz(c, g) {
     }
   }
   g.globalAlpha = 1;
+}
+
+/* ── fullscreen output meter ───────────────────────────────────────────── */
+/* Sits under the volume slider in the full-screen player on every build.
+   Desktop and the browser read the live Web Audio analyser. Android cannot
+   expose decoded samples to the WebView, so the meter follows the playback
+   clock for the current track instead of claiming to measure the stream. */
+const METER_SEGS = 24;
+let meterEls = [], meterRaf = 0, meterLast = 0, meterVal = 0, meterPeak = 0, meterPeakAt = 0, meterWave = null;
+function buildMeter() {
+  const host = $('#np-meter'); if (!host) return;
+  if (!host.childElementCount) host.innerHTML = '<i></i>'.repeat(METER_SEGS);
+  meterEls = [...host.children];
+}
+function meterTarget() {
+  const vol = R.muted ? 0 : Math.max(0, Math.min(1, S.settings.volume));
+  if (!R.playing || vol <= 0.001) return 0;
+  if (!NATIVE && analyser) {
+    try {
+      const n = analyser.fftSize;
+      if (!meterWave || meterWave.length !== n) meterWave = new Uint8Array(n);
+      analyser.getByteTimeDomainData(meterWave);
+      let sum = 0;
+      for (let i = 0; i < n; i += 2) { const v = (meterWave[i] - 128) / 128; sum += v * v; }
+      let out = Math.sqrt(sum / Math.max(1, n / 2)) * vol;
+      if (S.settings.smartVolume) out *= Math.max(0.45, Math.min(1.65, R.normGain || 1));
+      const db = 20 * Math.log10(Math.max(1e-6, out));
+      return Math.max(0, Math.min(1, (db + 48) / 42));
+    } catch {}
+  }
+  // Playback-driven estimate: moves only while audio plays and freezes on pause.
+  vizSeedFor(R.cur);
+  const t = (audio.currentTime || 0) * 0.85, s = vizSeed * 6.283, n = 18;
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += synthLevelAt(i, n, t, s);
+  return Math.max(0, Math.min(1, (sum / n) * 1.6 * (0.18 + 0.82 * vol)));
+}
+function paintMeter() {
+  const total = meterEls.length; if (!total) return;
+  const lit = Math.round(meterVal * total);
+  const peak = Math.max(-1, Math.min(total - 1, Math.round(meterPeak * total) - 1));
+  for (let i = 0; i < total; i++) {
+    meterEls[i].classList.toggle('on', i < lit);
+    meterEls[i].classList.toggle('peak', i >= lit && i === peak);
+  }
+}
+function meterLoop(ts) {
+  meterRaf = requestAnimationFrame(meterLoop);
+  if (document.hidden) return;
+  if (ts - meterLast < 50) return;
+  meterLast = ts;
+  const target = meterTarget();
+  meterVal += (target - meterVal) * (target > meterVal ? 0.58 : 0.16);
+  if (meterVal < 0.012) meterVal = 0;
+  if (target >= meterPeak) { meterPeak = target; meterPeakAt = ts; }
+  else if (ts - meterPeakAt > 450) meterPeak = Math.max(target, meterPeak - 0.02);
+  paintMeter();
+}
+function meterSync(on) {
+  buildMeter();
+  if (!on) {
+    if (meterRaf) cancelAnimationFrame(meterRaf);
+    meterRaf = 0; meterVal = 0; meterPeak = 0; paintMeter();
+    return;
+  }
+  if (!meterRaf) { meterLast = 0; meterRaf = requestAnimationFrame(meterLoop); }
 }
 
 /* ═════════ playback ═════════ */
@@ -1882,6 +2025,7 @@ async function doPlayTrack(t, my, attempt, startAt = 0) {
   // Set new source — cache-bust on retry
   audio.src = src;
   try { audio.load(); } catch {}
+  requestSmartGain(t);
   if (startAt > 0.5) {
     const seek = () => { try { if (!isFinite(audio.duration) || startAt < audio.duration - 1) audio.currentTime = startAt; } catch {} };
     if (audio.readyState >= 1) seek();
@@ -3043,10 +3187,45 @@ const acts = {
     if (!url || !code) return toast('Enter the host address and pairing code');
     try {
       R.sync = await api('/api/sync/join', { json: { url, code } });
+      endSyncFind();
       await refreshLibraryState();
       syncPaint();
       toast(`Connected to ${R.sync.peer || 'host'}`);
     } catch (e) { toast(e.message); await syncLoad(true); }
+  },
+  'sync-find': async () => {
+    if (finding) return;
+    const box = $('#sync-found');
+    const btn = document.querySelector('[data-act="sync-find"]');
+    finding = true;
+    if (btn) btn.disabled = true;
+    if (box) box.innerHTML = '<div class="sync-scan"><i></i>Looking for Wavelength on this network…</div>';
+    if (NATIVE) {
+      try {
+        window.AndroidBridge.startDiscovery($('#sync-url')?.value || '');
+        findTimer = setTimeout(() => window.wlDiscovery('{"hosts":[]}'), 22000);
+      } catch {
+        endSyncFind();
+        showSyncHosts([], 'This build cannot search the network. Paste the computer address instead.');
+      }
+      return;
+    }
+    try {
+      const r = await api('/api/sync/find');
+      endSyncFind();
+      showSyncHosts(r.hosts, 'No hosts answered. Start hosting on the other device and keep both on the same network.');
+    } catch (e) {
+      endSyncFind();
+      showSyncHosts([], e.message || 'Could not search this network');
+    }
+  },
+  'sync-pick': el => {
+    const url = el.dataset.url || '';
+    const input = $('#sync-url');
+    if (input) { input.value = url; input.dispatchEvent(new Event('input', { bubbles: true })); }
+    const code = $('#sync-code'); if (code) code.focus();
+    const box = $('#sync-found');
+    if (box) box.innerHTML = `<div class="sync-found-note">Selected <b>${esc(url)}</b>. Enter the pairing code from the computer.</div>`;
   },
   'sync-pull': async () => {
     try { R.sync = await api('/api/sync/pull', { method: 'POST' }); await refreshLibraryState(); syncPaint(); toast('Library pulled from host'); }
@@ -3163,9 +3342,13 @@ const acts = {
     if (k === 'resume' && !S.settings.resume) clearSession();
     if (k === 'gapless') { if (S.settings.gapless) schedulePrepare(500); else cancelPrepared(); }
     if (k === 'smartVolume') {
-      if (S.settings.smartVolume) ensureGraph();
-      if (!S.settings.smartVolume && normGain && actx) { R.normGain = 1; normGain.gain.setValueAtTime(1, actx.currentTime); }
-      if (S.settings.smartVolume && NATIVE) toast('Smart volume is desktop/browser only for now');
+      if (NATIVE) {
+        if (S.settings.smartVolume) requestSmartGain(R.cur);
+        else setSmartGain(1, false);
+      } else {
+        if (S.settings.smartVolume) ensureGraph();
+        if (!S.settings.smartVolume && normGain && actx) { R.normGain = 1; normGain.gain.setValueAtTime(1, actx.currentTime); }
+      }
     }
     if (k === 'skipCredits') { if (S.settings.skipCredits) creditsFor(R.cur); else { R.credits = null; R.creditDone = ''; } }
     if (k === 'headphonesPause') syncNativePrefs();

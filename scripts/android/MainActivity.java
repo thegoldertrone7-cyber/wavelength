@@ -58,19 +58,32 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
+import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -114,11 +127,17 @@ public class MainActivity extends AppCompatActivity {
     private final ExecutorService io = Executors.newFixedThreadPool(4);
     private final Map<String, CacheEntry> searchCache = new ConcurrentHashMap<>();
     private final Map<String, CacheEntry> streamCache = new ConcurrentHashMap<>();
+    private final Map<String, Double> loudnessCache = new ConcurrentHashMap<>();
+    private final Set<String> loudnessPending = ConcurrentHashMap.newKeySet();
     private final Map<String, CacheEntry> infoCache = new ConcurrentHashMap<>();
     private SharedPreferences prefs;
     private NotificationManager notificationManager;
     private AudioManager audioManager;
     private boolean volumeReceiverOn = false;
+    private volatile boolean discovering = false;
+    private int discoveryGen = 0;
+    private static final int DISCOVERY_PORT = 38423;
+    private static final String DISCOVERY_PROBE = "WAVELENGTH_DISCOVER_V1";
     private File stateFile;
     private boolean pageReady = false;
     private int safeTopCss = 0;
@@ -457,6 +476,19 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 return false;
             }
+        }
+
+        @JavascriptInterface
+        public void startDiscovery(String hint) {
+            MainActivity.this.startDiscovery(hint);
+        }
+
+        /* Smart volume asks for the gain once per song. The analysis runs on
+           the IO pool and answers through wlLoudness(), so playback never
+           waits for the decoder. */
+        @JavascriptInterface
+        public void analyzeLoudness(String id, String quality) {
+            MainActivity.this.analyzeLoudness(id, quality);
         }
 
         @JavascriptInterface
@@ -951,6 +983,214 @@ public class MainActivity extends AppCompatActivity {
 
     /* ── device sync ────────────────────────────────────────────────── */
 
+    /* A phone cannot guess the computer's address. Broadcast a tiny UDP probe
+       first (the desktop answers while hosting), then sweep the local /24 for
+       /api/sync/info when a router filters broadcast. Results go back to the
+       page through wlDiscovery() so the UI stays responsive. */
+    private void startDiscovery(final String hint) {
+        if (discovering) return;
+        final int gen = ++discoveryGen;
+        discovering = true;
+        new Thread(() -> {
+            JSONArray hosts = new JSONArray();
+            Set<String> seen = new HashSet<>();
+            DatagramSocket socket = null;
+            try {
+                socket = new DatagramSocket();
+                socket.setBroadcast(true);
+                byte[] probe = DISCOVERY_PROBE.getBytes(StandardCharsets.UTF_8);
+                for (InetAddress address : discoveryTargets()) {
+                    try {
+                        socket.send(new DatagramPacket(probe, probe.length, address, DISCOVERY_PORT));
+                    } catch (Exception ignored) {}
+                }
+                byte[] buffer = new byte[2048];
+                long until = System.currentTimeMillis() + 1400;
+                while (System.currentTimeMillis() < until && gen == discoveryGen) {
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                    socket.setSoTimeout((int) Math.max(60, until - System.currentTimeMillis()));
+                    try {
+                        socket.receive(packet);
+                    } catch (SocketTimeoutException timeout) {
+                        break;
+                    }
+                    try {
+                        JSONObject info = new JSONObject(new String(packet.getData(), 0,
+                            packet.getLength(), StandardCharsets.UTF_8));
+                        int port = info.optInt("port", 0);
+                        if (!"wavelength".equals(info.optString("app")) || port <= 0) continue;
+                        String ip = packet.getAddress().getHostAddress();
+                        addDiscovered(hosts, seen, "http://" + ip + ":" + port,
+                            info.optString("name", ip), info.optString("version", ""));
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (socket != null) try { socket.close(); } catch (Exception ignored) {}
+            }
+            if (hosts.length() == 0 && gen == discoveryGen) {
+                sweepForHosts(hosts, seen, hint, gen);
+            }
+            if (gen != discoveryGen) return;
+            String payload;
+            try {
+                payload = new JSONObject().put("hosts", hosts).toString();
+            } catch (Exception e) {
+                payload = "{\"hosts\":[]}";
+            }
+            final String out = payload;
+            main.post(() -> {
+                if (gen != discoveryGen) return;
+                discovering = false;
+                if (wv != null) {
+                    wv.evaluateJavascript("window.wlDiscovery&&window.wlDiscovery("
+                        + JSONObject.quote(out) + ")", null);
+                }
+            });
+        }, "wl-discover").start();
+    }
+
+    private void sweepForHosts(JSONArray hosts, Set<String> seen, String hint, int gen) {
+        String local = wifiIpv4();
+        if (local == null) return;
+        String prefix = local.substring(0, local.lastIndexOf('.') + 1);
+        Set<Integer> ports = new LinkedHashSet<>();
+        ports.add(38422);
+        ports.add(3001);
+        int hintPort = portOf(hint);
+        if (hintPort > 0) {
+            ports.add(hintPort);
+            if (hintPort < 65535) ports.add(hintPort + 1);
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(40);
+        List<Future<?>> tasks = new ArrayList<>();
+        try {
+            for (int i = 1; i <= 254 && gen == discoveryGen; i++) {
+                final String ip = prefix + i;
+                for (final int port : ports) {
+                    tasks.add(pool.submit(() -> {
+                        if (gen != discoveryGen) return;
+                        JSONObject info = syncInfoQuiet(ip, port);
+                        if (info == null) return;
+                        addDiscovered(hosts, seen, "http://" + ip + ":" + port,
+                            info.optString("name", ip), info.optString("version", ""));
+                    }));
+                }
+            }
+            for (Future<?> task : tasks) {
+                try { task.get(); } catch (Exception ignored) {}
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static void addDiscovered(JSONArray hosts, Set<String> seen, String url, String name, String version) {
+        synchronized (hosts) {
+            if (!seen.add(url)) return;
+            try {
+                hosts.put(new JSONObject().put("url", url)
+                    .put("name", name == null || name.isEmpty() ? url : name)
+                    .put("version", version == null ? "" : version));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private static JSONObject syncInfoQuiet(String host, int port) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL("http://" + host + ":" + port + "/api/sync/info");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(420);
+            conn.setReadTimeout(700);
+            conn.setRequestProperty("Accept", "application/json");
+            if (conn.getResponseCode() != 200) return null;
+            return new JSONObject(readUtf8(conn.getInputStream()));
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static List<InetAddress> discoveryTargets() {
+        List<InetAddress> out = new ArrayList<>();
+        try { out.add(InetAddress.getByName("255.255.255.255")); } catch (Exception ignored) {}
+        try {
+            for (NetworkInterface network : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!network.isUp() || network.isLoopback() || !isLanName(network.getName())) continue;
+                for (InterfaceAddress address : network.getInterfaceAddresses()) {
+                    InetAddress broadcast = address.getBroadcast();
+                    if (broadcast != null) out.add(broadcast);
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static String wifiIpv4() {
+        try {
+            for (NetworkInterface network : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!network.isUp() || network.isLoopback() || !isLanName(network.getName())) continue;
+                for (InterfaceAddress address : network.getInterfaceAddresses()) {
+                    InetAddress ip = address.getAddress();
+                    if (ip instanceof Inet4Address && !ip.isLoopbackAddress()
+                        && !ip.getHostAddress().startsWith("169.254.")) {
+                        return ip.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static boolean isLanName(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase(Locale.ROOT);
+        return n.startsWith("wlan") || n.startsWith("eth") || n.startsWith("ap");
+    }
+
+    private static int portOf(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return -1;
+        try {
+            Uri u = Uri.parse(raw.trim().matches("(?i)^https?://.*") ? raw.trim() : "http://" + raw.trim());
+            return u.getPort();
+        } catch (Exception ignored) {
+            return -1;
+        }
+    }
+
+    private void analyzeLoudness(final String rawId, final String quality) {
+        String id;
+        try { id = cleanId(rawId == null ? "" : rawId); }
+        catch (Exception e) { return; }
+        final String trackId = id;
+        Double hit = loudnessCache.get(trackId);
+        if (hit != null) { sendLoudness(trackId, hit); return; }
+        if (!loudnessPending.add(trackId)) return;
+        io.execute(() -> {
+            double gain = 1;
+            try {
+                String url = resolveAudio(trackId,
+                    quality == null || quality.isEmpty() ? "best" : quality);
+                gain = LoudnessAnalyzer.gainFor(url);
+            } catch (Exception ignored) {}
+            loudnessCache.put(trackId, gain);
+            loudnessPending.remove(trackId);
+            sendLoudness(trackId, gain);
+        });
+    }
+
+    private void sendLoudness(final String id, final double gain) {
+        main.post(() -> {
+            if (wv == null) return;
+            try {
+                wv.evaluateJavascript("window.wlLoudness&&window.wlLoudness("
+                    + JSONObject.quote(id) + "," + gain + ")", null);
+            } catch (Exception ignored) {}
+        });
+    }
+
     private JSONObject syncStatus() throws Exception {
         String url = prefs.getString(KEY_SYNC_URL, "");
         String code = prefs.getString(KEY_SYNC_CODE, "");
@@ -991,7 +1231,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private JSONObject syncJoin(JSONObject input) throws Exception {
-        String base = syncBase(input.optString("url", ""));
+        String base = syncResolveBase(syncBase(input.optString("url", "")));
         String code = syncCode(input.optString("code", ""));
         if (code.length() < 6) throw new Exception("Enter the pairing code shown on the computer");
         JSONObject info = syncFetch(base, code, "GET", "/api/sync/info", null);
@@ -1230,8 +1470,35 @@ public class MainActivity extends AppCompatActivity {
         if (host == null || host.isEmpty()) throw new Exception("That host address is not valid");
         if (!scheme.equals("http") && !scheme.equals("https")) throw new Exception("Use an http:// or https:// address");
         int port = u.getPort();
-        if (port < 0) port = 38421;
+        if (port < 0) port = 38422;
         return scheme + "://" + host + ":" + port;
+    }
+
+    /* People copy the player address from Phone & browser access, but that
+       port serves the app rather than sync. Ask its /api/health for the real
+       sync port and correct the address instead of failing with a 404. */
+    private static String syncResolveBase(String base) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(base + "/api/health").openConnection();
+            conn.setConnectTimeout(2500);
+            conn.setReadTimeout(2500);
+            conn.setRequestProperty("Accept", "application/json");
+            if (conn.getResponseCode() != 200) return base;
+            JSONObject health = new JSONObject(readUtf8(conn.getInputStream()));
+            int want = health.optInt("syncPort", 0);
+            Uri u = Uri.parse(base);
+            if (want > 0 && want != u.getPort()) {
+                String host = u.getHost();
+                if (host == null) return base;
+                if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
+                return u.getScheme() + "://" + host + ":" + want;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return base;
     }
 
     private static String syncCode(String raw) {
@@ -1269,6 +1536,8 @@ public class MainActivity extends AppCompatActivity {
             throw new Exception("The computer did not answer in time");
         } catch (java.net.ConnectException e) {
             throw new Exception("Could not reach the computer");
+        } catch (java.net.UnknownHostException e) {
+            throw new Exception("Could not find that address. Check the computer address, or tap Find devices");
         } finally {
             if (conn != null) conn.disconnect();
         }

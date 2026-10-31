@@ -6,7 +6,7 @@
  *   chunked-pipe with backpressure, 3-attempt retry ladder.
  */
 const http = require('http'), fs = require('fs'), path = require('path'),
-      os = require('os'), crypto = require('crypto');
+      os = require('os'), crypto = require('crypto'), dgram = require('dgram');
 const { spawn, execFile } = require('child_process');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
@@ -1744,6 +1744,93 @@ const syncUrls = () => {
   }
   return [...new Set(urls)];
 };
+
+/* ── LAN discovery ──────────────────────────────────────────────────
+   A phone cannot guess the computer's address. While hosting, answer a tiny
+   broadcast probe on UDP 38423 and name the sync port, so the Android app can
+   offer a real Find devices button instead of asking people to type an IP. */
+const SYNC_DISCOVERY_PORT = +process.env.SYNC_DISCOVERY_PORT || 38423;
+const SYNC_PROBE = 'WAVELENGTH_DISCOVER_V1';
+let syncDiscovery = null;
+function startSyncDiscovery() {
+  if (syncDiscovery) return;
+  let sock;
+  try { sock = dgram.createSocket({ type: 'udp4', reuseAddr: true }); }
+  catch { return; }
+  const close = () => { if (syncDiscovery === sock) syncDiscovery = null; try { sock.close(); } catch {} };
+  sock.on('error', e => {
+    close();
+    console.warn(`[sync] discovery unavailable: ${e.message}`);
+  });
+  sock.on('message', (msg, rinfo) => {
+    if (!msg || msg.length > 64) return;
+    if (msg.toString('utf8', 0, SYNC_PROBE.length) !== SYNC_PROBE) return;
+    if (sync.role !== 'host' || !sync.enabled) return;
+    const reply = Buffer.from(JSON.stringify({
+      app: 'wavelength', name: os.hostname(), version: VERSION,
+      port: SYNC_PORT, rev: +sync.rev || 0,
+    }));
+    try { sock.send(reply, 0, reply.length, rinfo.port, rinfo.address); } catch {}
+  });
+  try {
+    sock.bind(SYNC_DISCOVERY_PORT, '0.0.0.0', () => {
+      syncDiscovery = sock;
+      console.log(`[sync] answering discovery on UDP ${SYNC_DISCOVERY_PORT}`);
+    });
+  } catch { close(); }
+}
+function stopSyncDiscovery() {
+  const s = syncDiscovery;
+  syncDiscovery = null;
+  if (s) try { s.close(); } catch {}
+}
+const syncBroadcasts = () => {
+  const out = new Set(['255.255.255.255']);
+  for (const nets of Object.values(os.networkInterfaces())) for (const n of nets || []) {
+    if (!n || n.family !== 'IPv4' || n.internal) continue;
+    const ip = n.address.split('.').map(Number), mask = (n.netmask || '255.255.255.0').split('.').map(Number);
+    if (ip.length !== 4 || mask.length !== 4) continue;
+    out.add(ip.map((v, i) => (v & mask[i]) | (~mask[i] & 255)).join('.'));
+  }
+  return [...out];
+};
+/* Used by the browser-mode join panel and as a self-check. Android runs the
+   same probe natively, then falls back to a TCP sweep when broadcast is
+   filtered by the router. */
+function probeSyncHosts(timeout = 1500) {
+  return new Promise(resolve => {
+    const found = new Map();
+    let sock, timer;
+    try { sock = dgram.createSocket('udp4'); } catch { return resolve([]); }
+    const finish = () => {
+      clearTimeout(timer);
+      try { sock.close(); } catch {}
+      resolve([...found.values()]);
+    };
+    sock.on('error', finish);
+    sock.on('message', (msg, rinfo) => {
+      try {
+        const o = JSON.parse(msg.toString('utf8'));
+        if (!o || o.app !== 'wavelength' || !(+o.port > 0)) return;
+        found.set(`${rinfo.address}:${o.port}`, {
+          url: `http://${rinfo.address}:${o.port}`,
+          name: syncText(o.name, 80) || rinfo.address,
+          version: syncText(o.version, 20),
+        });
+      } catch {}
+    });
+    timer = setTimeout(finish, timeout);
+    try {
+      sock.bind(() => {
+        try { sock.setBroadcast(true); } catch {}
+        const buf = Buffer.from(SYNC_PROBE);
+        for (const addr of [...syncBroadcasts(), '127.0.0.1']) {
+          try { sock.send(buf, 0, buf.length, SYNC_DISCOVERY_PORT, addr); } catch {}
+        }
+      });
+    } catch { finish(); }
+  });
+}
 const syncStatus = () => {
   const lib = readSyncLibrary();
   return {
@@ -1862,6 +1949,7 @@ async function startSyncHost() {
       sync.enabled = true;
       syncLastError = '';
       syncSave();
+      startSyncDiscovery();
       console.log(`[sync] hosting on port ${SYNC_PORT}`);
       resolve();
     });
@@ -1871,6 +1959,7 @@ async function startSyncHost() {
 async function stopSyncHost() {
   const s = syncServer;
   syncServer = null;
+  stopSyncDiscovery();
   if (s) await new Promise(resolve => { try { s.close(() => resolve()); } catch { resolve(); } });
   sync.role = 'off';
   sync.enabled = false;
@@ -1893,6 +1982,23 @@ const syncHostBase = input => {
   if (!u.port) u.port = String(SYNC_PORT);
   return u.origin;
 };
+/* People naturally copy the player address from Phone & browser access. That
+   port serves the app, not sync, so ask its /api/health for the sync port and
+   correct the address instead of failing with a 404. */
+async function syncBaseForJoin(base) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    const r = await fetch(base + '/api/health', { signal: ctrl.signal });
+    if (!r.ok) return base;
+    const v = await r.json();
+    const want = +v.syncPort;
+    const u = new URL(base);
+    if (want > 0 && String(want) !== u.port) { u.port = String(want); return u.origin; }
+  } catch {}
+  finally { clearTimeout(timer); }
+  return base;
+}
 async function syncRemote(base, code, route, init = {}, timeout = 9000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -1914,7 +2020,7 @@ async function syncRemote(base, code, route, init = {}, timeout = 9000) {
   }
 }
 async function joinSync(input = {}) {
-  const base = syncHostBase(input.url);
+  const base = await syncBaseForJoin(syncHostBase(input.url));
   const code = syncCode(input.code);
   if (code.length < 6) throw httpErr(400, 'Enter the pairing code shown on the host');
   const local = readSyncLibrary();
@@ -2127,6 +2233,7 @@ async function api(req,res,u,p){
   }
 
   if(m==='GET'&&p==='/api/sync/status') return json(res,syncStatus());
+  if(m==='GET'&&p==='/api/sync/find') return json(res,{hosts:await probeSyncHosts(), discoveryPort:SYNC_DISCOVERY_PORT, port:SYNC_PORT});
   if(m==='POST'&&p==='/api/sync/host') return json(res,await startSyncHost());
   if(m==='POST'&&p==='/api/sync/stop') return json(res,await stopSyncHost());
   if(m==='POST'&&p==='/api/sync/join') return json(res,await joinSync(await parse()));

@@ -1,7 +1,7 @@
 {
   "name": "wavelength",
   "productName": "Wavelength",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Free, ad-free music app: import Spotify links, play via YouTube, download MP3s.",
   "author": "Wavelength",
   "private": true,

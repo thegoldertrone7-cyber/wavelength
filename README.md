@@ -141,13 +141,18 @@ On Android today:
   Bluetooth pauses playback when **Pause when headphones disconnect** is on.
 - Change volume from the full-screen player or **Settings → Playback**. It moves the phone's
   media stream, so the slider, the hardware keys and Android's volume panel stay in step.
+- Turn on **Smart volume** in **Settings → Playback**. The phone samples the first few seconds of
+  each song natively and turns louder songs down. It never boosts above your set volume, so quiet
+  songs stay quiet; it is best-effort balancing, not a studio master.
 - Add the Wavelength home-screen widget. It shows the artwork, title, artist, album and a
   Playing/Paused label, with previous, play/pause and next buttons.
 - Open the full-screen player for the visualizer. All four styles are there, in small, medium,
   large and full-screen sizes; the full-screen size turns the visualizer into the player backdrop.
   Android plays audio inside the WebView, which exposes no samples, so the phone draws a
   track-seeded spectrum from the playback clock: it moves while a song plays and settles flat on
-  pause. It is not a real audio spectrum, and the settings say so.
+  pause. It is not a real audio spectrum, and the settings say so. The output meter under the
+  full-screen volume slider follows the same rule: live audio on desktop and in the browser,
+  playback-driven on Android, never a claim to measure the phone's stream.
 - Lock the phone during playback to see a brief now-playing view: artwork, song details, progress,
   controls, and the visualizer as the background. It fades out after a few seconds. On Android 14
   and newer, settings offers an **Allow lock-screen display** row when Android still needs the
@@ -164,8 +169,10 @@ The computer is only needed while syncing; disconnect and keep listening on the 
 
 1. On the computer, open **Settings → Devices → Start hosting**. Note the address
    (for example `http://192.168.1.10:38422`) and the pairing code.
-2. On the phone, open **Settings → Devices → Join a host**, enter the address including
-   the sync port and the pairing code.
+2. On the phone, open **Settings → Devices → Join a host**, then tap **Find devices** to look for
+   the computer on the same Wi-Fi. You can also type the address including the sync port and the
+   pairing code. Find devices cannot see a computer over Tailscale; paste its `100.x` address
+   instead.
 3. Use **Merge data** to combine both libraries while keeping every playlist. Use **Pull now** only
    when you want the host copy to replace the phone, or **Send changes** to replace the host with the
    phone copy. **Disconnect** when finished.

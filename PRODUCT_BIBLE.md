@@ -12,11 +12,12 @@
 | --- | --- | --- |
 | Android APK | **v2.4.0** | Standalone, debug-signed, direct install |
 | Published desktop installers | **v2.4.0** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
-| Source / browser mode | **v2.4.0 tree** | Runs through the bundled Node server |
+| Source / browser mode | **v2.4.1 tree** | Runs through the bundled Node server |
 
 `v2.4.0` ships every platform: macOS universal DMG, Windows installer, Linux AppImage, Flatpak
-and the Android APK. The desktop builds are unsigned. This document describes shipped behaviour
-first and future direction second.
+and the Android APK. The desktop builds are unsigned. A v2.4.1 Android build adds **Find devices**,
+Android **Smart volume** and the full-screen volume meter; it is built locally and not published
+yet. This document describes shipped behaviour first and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -662,8 +663,8 @@ Sections:
 - Smart shuffle builds a balanced queue from the whole library, rotating across playlists instead of
   letting one collection dominate.
 - Remix playlists combine several playlists into a new list with balanced representation.
-- Smart volume evens out quiet and loud tracks on desktop and browser. Android playback is not
-  processed by the Web Audio chain, so the toggle is not offered there.
+- Smart volume evens out quiet and loud tracks. On Android it samples the first seconds of each
+  song natively and only attenuates loud ones, so it never boosts above the user's volume.
 - Skip credits when chapter or segment metadata marks an outro or credits section in the second half
   of a track. This is best-effort and does nothing when the metadata is missing.
 - Previous, next, play/pause, seek, volume, mute.
@@ -674,7 +675,8 @@ Sections:
 - Sleep timer.
 - Streaming quality: best available or data saver.
 - Full-screen player with four visualizer modes: real audio on desktop/browser, playback-driven on
-  Android.
+  Android. A slim output meter under the volume slider reads the live analyser on desktop/browser
+  and follows the playback clock on Android, where the WebView exposes no samples.
 - Broken-track skipping and retry handling.
 - Bluetooth or headphone disconnect pauses playback. Android listens for the system noisy-audio
   broadcast; desktop/browser watches output devices on a best-effort basis.
@@ -786,8 +788,8 @@ These are the details that make the app feel planned rather than assembled.
 - **Smart shuffle reads the whole library.** It rotates through playlists so one long collection
   cannot fill the queue; Remix creates the same balance as a saved playlist.
 - **Smart volume evens out tracks.** Quiet songs get a lift and loud ones are held back on
-  desktop/browser. The setting is absent on Android because its playback path bypasses the Web
-  Audio chain.
+  desktop/browser. On Android the phone samples each song's first seconds natively and turns loud
+  songs down; it never boosts above the user's volume.
 - **Credits skip is cautious.** It only jumps when chapter metadata clearly names credits or an
   outro in the second half of the track. No metadata means normal playback.
 - **Unplugging stops the music.** Android pauses on the system noisy-audio broadcast; desktop and
@@ -809,6 +811,10 @@ These are the details that make the app feel planned rather than assembled.
   audio signal on desktop and in the browser. On Android the WebView player exposes no samples, so
   the phone draws a track-seeded spectrum from the playback clock. Sizes range from small to a
   full-screen backdrop.
+- **The full-screen volume meter follows the sound.** A slim segmented meter sits under the volume
+  slider and tracks the live analyser on desktop and in the browser. Android has no decoded samples
+  in the WebView, so it uses the same playback-clock estimate as the visualizer and settles on
+  mute or pause. It is an output-level guide, not a calibrated measurement.
 - **The queue closes with a swipe.** On phones, swipe down on the sheet.
 - **The sleep timer survives reloads.** It is stored as an absolute time, not a countdown that
   restarts.
@@ -935,7 +941,8 @@ cloud product.
 - Home-screen widget with artwork, title, artist, album, state, and play/pause, previous and next.
 - Full-screen player visualizer in all four styles and four sizes, including a full-screen backdrop.
   The WebView player exposes no audio samples, so Android draws a track-seeded spectrum driven by
-  the playback clock: it moves only while a song plays and settles flat on pause.
+  the playback clock: it moves only while a song plays and settles flat on pause. The volume meter
+  under the full-screen slider uses the same playback-driven estimate, not decoded audio.
 - Brief lock-screen now-playing view with artwork, song details, progress, controls, and the
   visualizer as the background. Shown when the screen turns off during playback, auto-hides.
 - Bluetooth and headset disconnect pauses playback when the setting is on.
@@ -960,6 +967,7 @@ cloud product.
 | MP3 downloads | Yes | Yes | No |
 | Local lossless playback | Yes | Yes | No |
 | Visualizers | Yes (real audio) | Yes (real audio) | Yes (playback-driven) |
+| Full-screen volume meter | Yes (real audio) | Yes (real audio) | Yes (playback-driven) |
 | Gapless preparation | Yes | Yes | No |
 | Endless playback | Yes | Yes | Yes |
 | Sleep timer | Yes | Yes | Yes |
@@ -979,7 +987,7 @@ cloud product.
 | Merge libraries without replacing | Yes | Yes | Yes (guest) |
 | No AI / blocked artist filter (best effort) | Yes | Yes | Yes |
 | Credits / outro skipping (metadata-based) | Yes | Yes | Yes |
-| Smart volume | Yes | Yes | No |
+| Smart volume | Yes | Yes | Yes (attenuation only) |
 | In-app volume control | Yes | Yes | Yes (phone media stream) |
 | Bluetooth disconnect pause | Best effort | Best effort | Yes |
 | Home-screen widget | No | No | Yes (art, album, transport) |
@@ -1023,13 +1031,18 @@ cloud product.
 - The same palette/style/reading/motion system.
 - Icon, emoji, and tone playlist covers.
 
-**Current source build (v2.4.0 tree)**
+**Current source build (v2.4.1 tree)**
 
 - Merge data on guest and host, with host recovery after a replacement.
 - Listening stats per device, merged through sync.
 - Listening recap with year presets and custom start/end dates.
 - Playlist sort, list/grid view, Remix playlists and library-wide Smart Shuffle.
-- Smart volume on desktop/browser; Bluetooth disconnect pause on Android.
+- Smart volume on desktop/browser and on Android (native sample, attenuation only); Bluetooth
+  disconnect pause on Android.
+- A slim volume meter under the full-screen player's slider: live audio on desktop/browser and a
+  playback-driven estimate on Android, where the WebView exposes no samples.
+- Find devices on the Devices screen: a UDP probe plus a local TCP sweep finds a hosting computer
+  on the same Wi-Fi without typing its address.
 - No AI keyword filter and blocked artists.
 - Metadata-based credits/outro skipping.
 - Android home-screen widget with artwork, album, state and transport.
@@ -1057,8 +1070,9 @@ cloud product.
 | External scrobbling (Last.fm and similar) | Not implemented | Listening stats are local and travel through Wavelength sync only. |
 | Reliable AI-song detection | Not implemented | No AI is a keyword and blocked-artist filter, not musical detection. |
 | Exact credits skipping | Best effort | Needs chapter metadata naming credits or an outro in the second half of the track. |
-| Smart volume on Android | Not available | Android playback bypasses the Web Audio processing chain. |
+| Smart volume on Android | Attenuation only | The phone samples the first seconds natively and turns loud songs down. It cannot boost quiet songs above the user's volume. |
 | Real-audio visualizer on Android | Not possible | The WebView's native player exposes no analyser, so the phone draws a track-seeded spectrum from the playback clock. |
+| Calibrated output meter on Android | Not possible | The full-screen meter follows the playback clock and volume level; it is not a sample-accurate measurement of the phone's media stream. |
 | Detailed recap rankings before this version | Partial | Total time is complete; per-song/artist/playlist ranking for older partial ranges starts with daily detail from this version. |
 | Merge preview for offline devices | Not available | A host can only preview libraries guests sent during the current hosting session. |
 | Deletion propagation | Not implemented | Merge is additive. A grow-only local baseline spots items removed here but still on another copy and offers them back; deleting an item never removes it from another device. |
@@ -1103,6 +1117,10 @@ These are repeated in the interface and should remain true in every future relea
   full-screen backdrop, a playback-driven Android visualizer, a brief lock-screen now-playing
   view, and volume control that follows the phone's media stream. Ships on macOS, Windows,
   Linux (AppImage and Flatpak) and Android.
+- **v2.4.1** — Find devices on the Devices screen, automatic correction when a copied player
+  address is used for sync, Smart volume on Android (native sample, attenuation only), and a
+  full-screen volume meter on every installer.
+  Unreleased until the build is published.
 - All published installers are on **v2.4.0**.
 
 ### 12.2 Phase 1 — Stabilise the instrument
