@@ -10,14 +10,16 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.1** | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.1** | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
-| Source / browser mode | **v2.4.1 tree** | Runs through the bundled Node server |
+| Android APK | **v2.4.1** stable · **2.5.0** Overhaul | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** stable · **2.5.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Source / browser mode | **v2.4.1** stable · **Overhaul** branch | Runs through the bundled Node server |
 
 `v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
 arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
-Android **Smart volume** and the full-screen volume meter. This document describes shipped
-behaviour first and future direction second.
+Android **Smart volume** and the full-screen volume meter. A second, separate release —
+**Overhaul 2.5.0**, built from the `Overhaul` branch — ships the same platforms with the visualizer
+gallery, queue and playlist tools, sleep timer and Android widget work described in §11.1. This
+document describes shipped behaviour first and future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -1051,11 +1053,27 @@ cloud product.
 - Android volume control bound to the phone's media stream, mirrored in the full-screen player
   and Settings → Playback.
 
+**Shipped in Overhaul 2.5.0**
+
+- Twenty visualizer styles, previewed live in the accent colour from a gallery in Settings, the
+  full-screen player or **V**. Android's lock screen draws the closest of its four classic looks.
+- Undo for removing a song, clearing or removing from the queue, removing duplicates and deleting
+  a playlist, from the toast or ⌘/Ctrl+Z.
+- Filter box in long playlists and Liked Songs, plus a playlist More menu: add to queue, play next,
+  remove duplicates, copy the song list.
+- Queue drag-reordering, **Mix** for the remaining songs, and **Save** to turn the queue into a
+  playlist.
+- Sleep timer from the full-screen player or **T**, including "After this song".
+- Touch shortcuts: swipe a song right to play next or left to like, double-tap the artwork edges to
+  skip 10 seconds, and a `?` shortcut sheet.
+- Taller Android widgets with progress and a like action, launcher shortcuts, notification like
+  actions, revised back handling and calmer motion.
+
 ### 11.2 Not in this build
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Queue drag-reordering | Not implemented | The queue supports play next, add, remove, and clear only. |
+| Queue drag-reordering | Overhaul 2.5.0 | Added on the `Overhaul` branch; v2.4.1 stable has play next, add, remove and clear only. |
 | Playlist drag-reordering | Not implemented | No folder or manual order tools. |
 | Android offline downloads | Not implemented | Named in the app as the next standalone step. |
 | Android local-file playback | Not implemented | Named in the app as the next standalone step. |
@@ -1095,8 +1113,8 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The published installers are all v2.4.1.** The desktop builds are unsigned, so macOS and
-   Windows show the usual first-launch warnings.
+8. **The stable installers are all v2.4.1; Overhaul is a separate 2.5.0 release.** The desktop
+   builds are unsigned, so macOS and Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
     service.
@@ -1121,7 +1139,13 @@ These are repeated in the interface and should remain true in every future relea
   address is used for sync, Smart volume on Android (native sample, attenuation only), and a
   full-screen volume meter on every installer. Ships on macOS, Windows, Linux (AppImage for x64
   and arm64, and Flatpak) and Android.
-- All published installers are on **v2.4.1**.
+- **Overhaul 2.5.0** — a separate release from the `Overhaul` branch: twenty visualizer styles
+  with a live gallery, undo and filtering across playlists and the queue, queue reorder/Mix/Save,
+  sleep timer, touch shortcuts, calmer motion, and taller Android widgets with progress, a like
+  action and launcher shortcuts. Ships on macOS, Windows, Linux (AppImage for x64 and arm64, and
+  Flatpak) and Android.
+- The latest stable release remains **v2.4.1**; Overhaul 2.5.0 is published beside it and is not
+  marked latest.
 
 ### 12.2 Phase 1 — Stabilise the instrument
 

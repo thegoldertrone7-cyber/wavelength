@@ -1,6 +1,41 @@
 # Downloads
 
-Latest release: **v2.4.1** — [Wavelength 2.4.1 for macOS, Windows, Linux and Android](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.4.1).
+Two builds are published side by side.
+
+- **Latest stable: v2.4.1** — [Wavelength 2.4.1 for macOS, Windows, Linux and Android](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.4.1).
+- **Overhaul: 2.5.0** — [Wavelength Overhaul (2.5.0)](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.0-overhaul),
+  built from the `Overhaul` branch. It is a separate release and does not replace v2.4.1.
+
+## Overhaul 2.5.0
+
+The Overhaul build adds twenty visualizer styles with a live gallery, undo and filtering across
+playlists and the queue, queue drag-reordering with **Mix** and **Save**, a sleep timer, touch
+shortcuts, calmer motion, and taller Android widgets with progress, a like action and launcher
+shortcuts. It includes every earlier feature and the same merge behaviour. Every installer and the
+APK are 2.5.0.
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Intel + Apple Silicon) | `Wavelength-2.5.0-macos-universal.dmg` | Unsigned; right-click → Open |
+| Windows 10/11 | `Wavelength-2.5.0-windows-setup.exe` | NSIS installer, unsigned |
+| Linux x64 | `Wavelength-2.5.0-linux.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux arm64 | `Wavelength-2.5.0-linux-arm64.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux | `Wavelength-2.5.0-linux-x86_64.flatpak` | Bundles `yt-dlp`, `ffmpeg`, `ffprobe` |
+| Android | `Wavelength-2.5.0-android.apk` | Debug-signed, direct install |
+
+`SHA256SUMS.txt` lists the checksum for every file. The Android APK checksum is also published as
+`Wavelength-2.5.0-android.apk.sha256`.
+
+```
+91475664254e497a899e3b71d27957c8cfc4dc43da7e901b411d2749c5da2b2b  Wavelength-2.5.0-android.apk
+cf937146dab61dcfa026e931a9498417da696f4187c779b205aa5fdc64bf4a8a  Wavelength-2.5.0-linux-arm64.AppImage
+adef278b0dff45f082519c800c805bcd5787b3d15f30944db2de8e2c841f0a75  Wavelength-2.5.0-linux-x86_64.flatpak
+1c95942a063789dfb68ebcf7600dd559d46af4e33e29c6806f6c4c072e00146f  Wavelength-2.5.0-linux.AppImage
+89702aa72a9126b544e1d3d3f676226ef49d17a8f8206a9613a509795383273b  Wavelength-2.5.0-macos-universal.dmg
+917e031adb3764722a29aef98ff4a0188eab8a058ba54f29721ff2f973094e27  Wavelength-2.5.0-windows-setup.exe
+```
+
+## Stable: v2.4.1
 
 **v2.4.1** makes connecting devices easier and adds a full-screen volume meter: a **Find devices**
 button that discovers a hosting computer on the same Wi-Fi, automatic correction when a copied
@@ -32,34 +67,36 @@ c290f8ea013ad6bca235c04bb581344286c5760a40faa6ad093cbcde46a0c10d  Wavelength-2.4
 
 ## Android
 
-`Wavelength-2.4.1-android.apk` is a **standalone** app. Search, streaming and your playlists run
-on the phone; no desktop app, Node, `yt-dlp`, `ffmpeg` or Wavelength server is required. An
-internet connection is still needed for YouTube playback.
+Both APKs are **standalone** apps. Search, streaming and your playlists run on the phone; no
+desktop app, Node, `yt-dlp`, `ffmpeg` or Wavelength server is required. An internet connection is
+still needed for YouTube playback.
 
-1. Download `Wavelength-2.4.1-android.apk` and allow installs from your browser/files app.
+1. Download the APK for the build you want and allow installs from your browser/files app.
 2. Open Wavelength and grant the notification permission so playback controls appear on the
    lock screen.
 3. Search YouTube, play songs and build playlists on the phone. The library is stored in the app
    and survives with the computer off.
 
-The APK is debug-signed for direct installation; it is not a Play Store build. v2.4.1 uses the
-same signing key as v2.4.0, v2.3.0, v2.2.5 and v2.2.6, so it installs over any of them and keeps
-your library. If you are still on v2.2.4 or older, uninstall that app first because it was signed
-with a different debug key. After installing, you can pull the library from the desktop host in
-**Settings → Devices**.
+The APKs are debug-signed for direct installation; they are not Play Store builds. v2.5.0 uses the
+same signing key as v2.4.1, v2.4.0, v2.3.0, v2.2.5 and v2.2.6, so either installs over any of them
+and keeps your library. If you are still on v2.2.4 or older, uninstall that app first because it
+was signed with a different debug key. After installing, you can pull the library from the desktop
+host in **Settings → Devices**.
 
 ### Widget, visualizer, volume and lock screen
 
 - **Home-screen widget** — long-press the home screen, choose widgets, and add Wavelength. It
   shows artwork, title, artist, album and a Playing/Paused label, with previous, play/pause and
-  next.
+  next. Overhaul adds taller layouts with progress and a like action.
 - **Visualizer** — open the full-screen player, or set the style and size in **Settings →
   Appearance**. Sizes are small, medium, large and full screen; full screen makes the canvas the
-  player backdrop. Android's WebView exposes no audio samples, so the phone draws a
-  track-seeded spectrum from the playback clock. It moves while a song plays, changes between
-  tracks and settles flat on pause. It is playback-driven, not a real audio spectrum. The slim
-  volume meter under the full-screen slider follows the same playback-driven estimate on Android;
-  on desktop and in the browser it reads the live audio analyser.
+  player backdrop. Overhaul offers twenty styles on desktop and in the browser, previewed live in
+  the style gallery. Android's WebView exposes no audio samples, so the phone draws a
+  track-seeded spectrum from the playback clock, and the lock screen draws the closest of the four
+  classic looks. It moves while a song plays, changes between tracks and settles flat on pause. It
+  is playback-driven, not a real audio spectrum. The slim volume meter under the full-screen
+  slider follows the same playback-driven estimate on Android; on desktop and in the browser it
+  reads the live audio analyser.
 - **Lock screen** — lock the phone during playback and a now-playing view appears briefly with
   artwork, details, progress, controls and the visualizer behind it, then steps out of the way.
   On Android 14 and newer, Android may require the full-screen notification permission; Settings
@@ -104,11 +141,14 @@ them on YouTube.
 
 ## Desktop
 
-- **macOS**: `Wavelength-2.4.1-macos-universal.dmg` (Intel + Apple Silicon). The build is unsigned;
-  right-click → Open, or run `xattr -cr /Applications/Wavelength.app`.
-- **Windows**: `Wavelength-2.4.1-windows-setup.exe` NSIS installer. It is unsigned, so SmartScreen
-  may ask for "More info → Run anyway".
-- **Linux**: `Wavelength-2.4.1-linux.AppImage` (x64), `Wavelength-2.4.1-linux-arm64.AppImage`
-  (arm64) or `Wavelength-2.4.1-linux-x86_64.flatpak`. The AppImages need `yt-dlp` and `ffmpeg`
-  installed; the Flatpak bundles both. Make the AppImage executable with
-  `chmod +x Wavelength-2.4.1-linux.AppImage`, then run it.
+The instructions are the same for both releases; substitute the version you downloaded.
+
+- **macOS**: `Wavelength-2.5.0-macos-universal.dmg` or `Wavelength-2.4.1-macos-universal.dmg`
+  (Intel + Apple Silicon). The builds are unsigned; right-click → Open, or run
+  `xattr -cr /Applications/Wavelength.app`.
+- **Windows**: `Wavelength-2.5.0-windows-setup.exe` or `Wavelength-2.4.1-windows-setup.exe` NSIS
+  installers. They are unsigned, so SmartScreen may ask for "More info → Run anyway".
+- **Linux**: `Wavelength-2.5.0-linux.AppImage` (x64), `Wavelength-2.5.0-linux-arm64.AppImage`
+  (arm64) or `Wavelength-2.5.0-linux-x86_64.flatpak`; v2.4.1 uses the same names with `2.4.1`.
+  The AppImages need `yt-dlp` and `ffmpeg` installed; the Flatpak bundles both. Make the AppImage
+  executable with `chmod +x Wavelength-2.5.0-linux.AppImage`, then run it.
