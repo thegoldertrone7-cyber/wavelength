@@ -17,7 +17,7 @@ Three ideas run through the whole app:
    rounded geometry and fade into each other. Navigation changes the content, not the mood.
 2. **Small mechanical details.** Dot-matrix play/pause symbols, a spinning record, dotted
    progress tracks and tiny numeric labels make the app feel handled rather than scrolled.
-3. **Calm motion.** Movement is soft and springy, never bouncy for its own sake. Reduced
+3. **Calm motion.** Movement is soft and settles without bounce. Reduced
    motion is a first-class setting, not an afterthought.
 
 ## Colour
@@ -102,28 +102,45 @@ the motif would stop meaning anything.
 
 ## Motion
 
-Two curves define the feel:
+Motion is calm, unhurried and never bouncy. The rules follow the stageshow motion guidance:
+things arrive whole, travel on one curve, settle softly, and stop. Nothing animates for show.
 
-- **Spring** — `cubic-bezier(.34, 1.56, .64, 1)`, used for presses, hover lifts, artwork
-  entrances and small state changes. It overshoots very slightly.
-- **Soft** — `cubic-bezier(.22, 1, .36, 1)`, used for fades, view changes and larger surfaces.
-  It settles without a visible bounce.
+Two curves do the work:
 
-Typical movement:
+- **Travel** — `cubic-bezier(.45, 0, .1, 1)` (`--spring` in the CSS; the name is historical).
+  A soft departure, a clear middle and a long settle. Used for anything that moves between
+  places: the queue sliding in, the toggle knob, the dot-matrix play icon.
+- **Arrival** — `cubic-bezier(.25, .8, .25, 1)` (`--soft`). For things that appear from nowhere:
+  views, rows, sheets, menus and toasts. It lands slowly and never overshoots.
 
-- page views fade and rise a few pixels, with a short blur on exit;
-- tiles lift and tilt less than a degree on hover;
-- the album art in the player rotates slowly while music plays;
-- the play button grows a soft ring in time with playback;
-- now-playing artwork bobs gently, while its background is a heavily blurred copy of the cover;
-- the queue and sheets slide in on a spring;
-- progress fills continuously, while the scrub thumb blooms on touch;
-- the full-screen player fades and scales in from the player bar.
+Rules:
 
-Motion is deliberately slow enough to read: 0.4–0.8 seconds for surfaces, 0.1–0.2 seconds for
-press feedback. Playing states are the only continuous animations. When reduced motion is on,
-ambient drift and record spin stop, and transitions collapse to near-instant changes. The app
-also respects the system preference by default.
+- **No overshoot, no springs.** Nothing bounces, tilts or rotates to say hello.
+- **Hover is colour, not movement.** Hover changes background, border or shadow. It never lifts,
+  slides or scales a row, tile or button.
+- **Press answers at once and small.** Controls dip to 0.9–0.99 in about 100 ms, starting on the
+  input rather than after a delay.
+- **Page changes crossfade.** The old view clears in 100 ms; the new one rises 8 px and settles
+  over about 280 ms. No blur, no scaling.
+- **Lists arrive in reading order,** 50 ms apart, each rising 10 px over 0.7 s.
+- **Overlays arrive whole from just above** their place (sheets, menus, toasts, the full-screen
+  player) and leave by fading. The queue travels in from the right edge.
+- **Nothing idles.** The record does not spin, the artwork does not bob and the play button does
+  not pulse. Only functional motion runs continuously: the equaliser on the playing row,
+  spinners, skeleton shimmer, the visualiser, and a very slow ambient drift in the background.
+- **Small accents settle.** A liked heart swells to 1.14 and returns; the active nav dot slides in.
+- **Undo is motion's partner.** Destructive actions apply immediately and offer a seven second
+  Undo toast, so nothing needs a confirmation dialog.
+
+When reduced motion is on, ambient drift stops and transitions collapse to near-instant changes.
+The app also respects the system preference by default.
+
+## Tap and focus states
+
+The system's tap highlight is switched off everywhere (`-webkit-tap-highlight-color`). On
+Android it appeared as a coloured square around tapped controls such as play/pause, and the
+native shell also disables the WebView's default focus highlight. Keyboard focus rings still
+exist, but only appear after the user presses Tab (`html[data-kbd]`), never after a tap or click.
 
 ## Layout
 
@@ -150,10 +167,12 @@ queue, full-screen and volume controls.
 
 The full-screen view is a quiet, blurred room built from the current cover. It contains the
 large artwork, title, artist, like control, optional audio visualiser, seek bar and transport.
-The visualiser has four modes (Matrix, Bars, Wave, Radial) and four sizes — small, medium, large
+The visualiser has twenty styles (Matrix, Bars, Wave, Radial, Mirror, Ribbon, Beads, Line, Rings,
+Orbit, Sunburst, Horizon, Segments, Peaks, Aurora, Scope, Pulse, Ridges, Fireflies, Spiral), each
+previewed live in a gallery (full-screen player → Style, Settings → Preview styles, or V), and four sizes — small, medium, large
 and full screen, where the canvas becomes the room's backdrop. On desktop and in the browser it
 reacts to the actual audio signal rather than a canned animation. Android's WebView player
-exposes no samples, so the phone draws a track-seeded spectrum from the playback clock: it moves
+exposes no samples (the lock screen draws the closest of four classic looks for the rest), so the phone draws a track-seeded spectrum from the playback clock: it moves
 while a song plays, changes per track, and settles flat on pause. The settings describe it as
 playback-driven instead of claiming real audio analysis.
 

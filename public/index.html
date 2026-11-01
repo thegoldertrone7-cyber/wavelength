@@ -90,11 +90,11 @@
     <button class="ib lg" data-act="next" data-ic="next" title="Next"></button>
     <button class="ib" data-act="repeat" data-ic="repeat" title="Repeat"></button>
   </div>
-  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="viz-full" id="b-viz-full">Full screen</button><button class="btn" data-act="queue">Queue</button></div>
+  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="viz-full" id="b-viz-full">Full screen</button><button class="btn" data-act="queue">Queue</button><button class="btn" data-act="sleep-menu" id="b-sleep">Sleep</button></div>
 </section>
 
 <aside class="queue card" id="queue">
-  <div class="q-h"><h3>Up next</h3><div><button class="btn sm" data-act="qclear">Clear</button><button class="ib" data-act="queue" data-ic="close" title="Close queue" aria-label="Close queue"></button></div></div>
+  <div class="q-h"><h3>Up next</h3><div><button class="btn sm" data-act="qsave" title="Save the queue as a playlist">Save</button><button class="btn sm" data-act="qshuf" title="Shuffle the songs after the current one">Mix</button><button class="btn sm" data-act="qclear">Clear</button><button class="ib" data-act="queue" data-ic="close" title="Close queue" aria-label="Close queue"></button></div></div>
   <div class="q-list" id="q-list"></div>
 </aside>
 
@@ -103,6 +103,7 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <audio id="audio" preload="auto"></audio>
 <audio id="audio-b" preload="auto" aria-hidden="true"></audio>
+<script src="js/viz.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

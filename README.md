@@ -71,6 +71,27 @@ a YouTube stream lossless. Settings → Playback also has a **Streaming quality*
 or Data saver. Local-file playback is currently a desktop feature; the standalone Android build does not
 read files from the phone yet.
 
+## Visualizer styles
+
+The full-screen player has twenty visualizer styles. Open the gallery from **Settings → Preview
+styles**, the **Style** button in the full-screen player, or press **V**. Every card animates live
+in your accent colour; tap one to use it. On Android the lock-screen view draws the closest of the
+four classic looks (Matrix, Bars, Wave, Radial) for styles it does not have.
+
+## Quality-of-life features
+
+- **Undo** for removing a song, clearing or removing from the queue, removing duplicates and
+  deleting a playlist (the toast's Undo button, or ⌘/Ctrl+Z). Deleting a playlist no longer asks first.
+- **Filter box** inside long playlists and Liked Songs, and a playlist **More** menu: add to queue,
+  play next, remove duplicates, copy the song list.
+- **Queue**: drag the grip to reorder, **Mix** shuffles only what is still to come, **Save** turns the
+  queue into a playlist.
+- **Sleep timer** from the full-screen player or **T**, including "After this song".
+- **Touch**: swipe a song right for Play next or left to like it (switch off under Settings →
+  Playback); double-tap the left or right of the artwork to skip 10 seconds.
+- Home shows **Resume**, **Play liked** and **Smart shuffle** shortcuts.
+- `?` opens the shortcut sheet (it used to focus search instead).
+
 ## Importing from Spotify
 
 Spotify -> Share -> Copy link -> paste into Wavelength (Import page, or straight into the search box).
@@ -145,8 +166,14 @@ On Android today:
 - Turn on **Smart volume** in **Settings → Playback**. The phone samples the first few seconds of
   each song natively and turns louder songs down. It never boosts above your set volume, so quiet
   songs stay quiet; it is best-effort balancing, not a studio master.
-- Add the Wavelength home-screen widget. It shows the artwork, title, artist, album and a
-  Playing/Paused label, with previous, play/pause and next buttons.
+- Add the Wavelength home-screen widget. Tall sizes show the artwork, title, artist, album, a
+  progress bar and previous, play/pause, next and like buttons; shorter sizes switch to a compact
+  strip. The play button uses your accent colour. If Wavelength is not running, Play opens it and
+  resumes where you left off.
+- Press and hold the app icon for shortcuts: Search, Liked songs, Smart shuffle.
+- Back closes the full-screen player, queue and dialogs first. At the start screen it sends the app
+  to the background while music plays instead of stopping it.
+- Like or unlike the current song from the notification, the media controls and the widget.
 - Open the full-screen player for the visualizer. All four styles are there, in small, medium,
   large and full-screen sizes; the full-screen size turns the visualizer into the player backdrop.
   Android plays audio inside the WebView, which exposes no samples, so the phone draws a

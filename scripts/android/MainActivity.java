@@ -103,6 +103,10 @@ public class MainActivity extends AppCompatActivity {
     static final String KEY_SYNC_PEER = "sync_peer";
     static final String KEY_SYNC_LAST = "sync_last";
     static final String KEY_SYNC_REV = "sync_rev";
+    /* Set by the widget and the launcher shortcuts. The page runs them once it
+       has finished booting. */
+    static final String EXTRA_LAUNCH_CMD = "launch_cmd";
+    static final String EXTRA_LAUNCH_ROUTE = "launch_route";
     static final String START_URL = "https://appassets.androidplatform.net/assets/public/index.html";
     static final String UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
@@ -143,6 +147,8 @@ public class MainActivity extends AppCompatActivity {
     private int safeTopCss = 0;
     private int safeBottomCss = 0;
     private String pendingShare = null;
+    private String pendingLaunchCmd = null;
+    private String pendingLaunchRoute = null;
     private static MainActivity current = null;
 
     private static final class CacheEntry {
@@ -168,6 +174,7 @@ public class MainActivity extends AppCompatActivity {
         setupInsets();
         watchMediaVolume();
         pendingShare = shareTarget(getIntent());
+        readLaunch(getIntent());
         wv.loadUrl(START_URL);
     }
 
@@ -253,6 +260,9 @@ public class MainActivity extends AppCompatActivity {
     private void buildWebView() {
         wv = new WebView(this);
         wv.setBackgroundColor(0xFF000000);
+        // No system focus or tap highlight: the page draws its own pressed states,
+        // and the default one shows up as a coloured square around tapped controls.
+        if (Build.VERSION.SDK_INT >= 26) wv.setDefaultFocusHighlightEnabled(false);
         WebSettings ws = wv.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
@@ -283,6 +293,7 @@ public class MainActivity extends AppCompatActivity {
                 pageReady = true;
                 applySafeInsets();
                 applyPendingShare();
+                applyLaunch();
             }
 
             @Override
@@ -322,7 +333,35 @@ public class MainActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         pendingShare = shareTarget(intent);
+        readLaunch(intent);
         applyPendingShare();
+        applyLaunch();
+    }
+
+    /* Widget and shortcut requests ride along as extras. They are removed once
+       read so a recreated activity never replays an old "play". */
+    private void readLaunch(Intent intent) {
+        if (intent == null) return;
+        String cmd = intent.getStringExtra(EXTRA_LAUNCH_CMD);
+        String route = intent.getStringExtra(EXTRA_LAUNCH_ROUTE);
+        if (cmd != null) { pendingLaunchCmd = cmd; intent.removeExtra(EXTRA_LAUNCH_CMD); }
+        if (route != null) { pendingLaunchRoute = route; intent.removeExtra(EXTRA_LAUNCH_ROUTE); }
+    }
+
+    private void applyLaunch() {
+        if (!pageReady || wv == null) return;
+        if (pendingLaunchRoute != null) {
+            String route = pendingLaunchRoute;
+            pendingLaunchRoute = null;
+            wv.evaluateJavascript("window.wlLaunch&&window.wlLaunch('route',"
+                + JSONObject.quote(route) + ");", null);
+        }
+        if (pendingLaunchCmd != null) {
+            String cmd = pendingLaunchCmd;
+            pendingLaunchCmd = null;
+            wv.evaluateJavascript("window.wlLaunch&&window.wlLaunch("
+                + JSONObject.quote(cmd) + ");", null);
+        }
     }
 
     private static String shareTarget(Intent intent) {
@@ -345,10 +384,21 @@ public class MainActivity extends AppCompatActivity {
         wv.evaluateJavascript(js, null);
     }
 
+    /* Back closes the top-most layer first (menu, dialog, queue, full-screen
+       player), then walks back through pages. At the very start, Back sends
+       the app to the background while music is playing instead of ending the
+       session and stopping the audio. */
     @Override
     public void onBackPressed() {
-        if (wv != null && wv.canGoBack()) wv.goBack();
-        else super.onBackPressed();
+        if (wv == null) { super.onBackPressed(); return; }
+        wv.evaluateJavascript(
+            "(function(){try{return !!(window.wlBack&&window.wlBack());}catch(e){return false;}})()",
+            value -> {
+                if ("true".equals(value)) return;
+                if (wv != null && wv.canGoBack()) { wv.goBack(); return; }
+                if (PlaybackService.isPlaying()) { moveTaskToBack(true); return; }
+                finish();
+            });
     }
 
     @Override
@@ -415,9 +465,17 @@ public class MainActivity extends AppCompatActivity {
             PlaybackService.pushMetadata(MainActivity.this, json);
         }
 
+        /* The page reports seconds; the service, lock screen and widget all use
+           milliseconds, which is also what Android's MediaSession expects. */
         @JavascriptInterface
         public void setPlaybackState(boolean playing, double position, double duration) {
-            PlaybackService.pushState(MainActivity.this, playing, position, duration);
+            PlaybackService.pushState(MainActivity.this, playing,
+                Math.max(0, position) * 1000.0, Math.max(0, duration) * 1000.0);
+        }
+
+        @JavascriptInterface
+        public void setLiked(boolean liked) {
+            PlaybackService.pushLiked(liked);
         }
 
         @JavascriptInterface

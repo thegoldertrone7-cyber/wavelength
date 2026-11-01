@@ -18,6 +18,7 @@ import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.SystemClock;
 
@@ -71,6 +72,9 @@ public class PlaybackService extends Service {
     private String artUrl = "";
     private Bitmap art;
     private boolean playing = false;
+    private boolean liked = false;
+    /* position and duration are milliseconds everywhere in native code. The
+       page speaks seconds; MainActivity.Bridge converts at the boundary. */
     private long position = 0;
     private long duration = 0;
 
@@ -78,6 +82,8 @@ public class PlaybackService extends Service {
     private String widgetArtist = "";
     private String widgetAlbum = "";
     private boolean widgetPlaying = false;
+    private boolean widgetLiked = false;
+    private long widgetPosBucket = -1;
     private int artVersion = 0;
     private int widgetArtVersion = -1;
     private boolean noisyRegistered = false;
@@ -112,6 +118,19 @@ public class PlaybackService extends Service {
             showLockScreen(PlaybackService.this);
         }
     };
+
+    static boolean isRunning() {
+        return instance != null;
+    }
+
+    static boolean isPlaying() {
+        PlaybackService s = instance;
+        return s != null && s.playing;
+    }
+
+    static void pushLiked(boolean liked) {
+        if (instance != null) instance.setLiked(liked);
+    }
 
     static boolean sendCommand(Context context, String command) {
         PlaybackService svc = instance;
@@ -228,7 +247,10 @@ public class PlaybackService extends Service {
             @Override public void onStop() { send("pause", 0); }
             @Override public void onSkipToNext() { send("next", 0); }
             @Override public void onSkipToPrevious() { send("prev", 0); }
-            @Override public void onSeekTo(long pos) { send("seek", pos); }
+            @Override public void onSeekTo(long pos) { send("seek", pos / 1000.0); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if ("like".equals(action)) send("like", 0);
+            }
         });
         session.setActive(true);
         try {
@@ -318,6 +340,14 @@ public class PlaybackService extends Service {
             String nextAlbum = o.optString("album", "Wavelength");
             String nextArt = o.optString("art", "");
             boolean artChanged = !nextArt.equals(artUrl);
+            boolean trackChanged = !nextTitle.equals(title) || !nextArtist.equals(artist);
+            liked = o.optBoolean("liked", false);
+            if (trackChanged) {
+                position = 0;
+                duration = 0;
+                widgetPosBucket = -1;
+                WavelengthWidget.progress(this, 0, 0);
+            }
             title = nextTitle;
             artist = nextArtist;
             album = nextAlbum.isEmpty() ? "Wavelength" : nextAlbum;
@@ -337,28 +367,52 @@ public class PlaybackService extends Service {
         playing = isPlaying;
         position = Math.max(0, pos);
         duration = Math.max(0, dur);
-        if (session != null) {
-            PlaybackState.Builder b = new PlaybackState.Builder()
-                .setActions(PlaybackState.ACTION_PLAY
-                    | PlaybackState.ACTION_PAUSE
-                    | PlaybackState.ACTION_PLAY_PAUSE
-                    | PlaybackState.ACTION_STOP
-                    | PlaybackState.ACTION_SEEK_TO
-                    | PlaybackState.ACTION_SKIP_TO_NEXT
-                    | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
-                .setState(isPlaying ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
-                    position,
-                    isPlaying ? 1f : 0f,
-                    SystemClock.elapsedRealtime());
-            if (duration > 0) b.setBufferedPosition(duration);
-            session.setPlaybackState(b.build());
-            session.setActive(true);
-        }
+        applyPlaybackState();
         if (!playing && notificationManager != null) {
             notificationManager.cancel(LOCK_NOTIFICATION_ID);
         }
         updateNotification();
         publishWidget();
+        pushWidgetProgress();
+    }
+
+    private void setLiked(boolean value) {
+        if (liked == value) return;
+        liked = value;
+        applyPlaybackState();
+        updateNotification();
+        publishWidget();
+    }
+
+    /* Android 13+ builds its media controls from the session, so the Like
+       button is exposed as a custom action there as well as in the notification. */
+    private void applyPlaybackState() {
+        if (session == null) return;
+        PlaybackState.Builder b = new PlaybackState.Builder()
+            .setActions(PlaybackState.ACTION_PLAY
+                | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE
+                | PlaybackState.ACTION_STOP
+                | PlaybackState.ACTION_SEEK_TO
+                | PlaybackState.ACTION_SKIP_TO_NEXT
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
+            .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                position,
+                playing ? 1f : 0f,
+                SystemClock.elapsedRealtime())
+            .addCustomAction("like", liked ? "Remove from Liked Songs" : "Like",
+                liked ? R.drawable.ic_heart_filled : R.drawable.ic_heart);
+        if (duration > 0) b.setBufferedPosition(duration);
+        session.setPlaybackState(b.build());
+        session.setActive(true);
+    }
+
+    /* The progress bar only needs a nudge every few seconds. */
+    private void pushWidgetProgress() {
+        long bucket = duration > 0 ? position / 5000 : -1;
+        if (bucket == widgetPosBucket) return;
+        widgetPosBucket = bucket;
+        WavelengthWidget.progress(this, position, duration);
     }
 
     /* The widget shows title, artist, album and play state, so avoid redraws on
@@ -366,7 +420,7 @@ public class PlaybackService extends Service {
     private void publishWidget() {
         if (title.equals(widgetTitle) && artist.equals(widgetArtist)
             && album.equals(widgetAlbum) && playing == widgetPlaying
-            && artVersion == widgetArtVersion) {
+            && liked == widgetLiked && artVersion == widgetArtVersion) {
             saveNowSnapshot();
             return;
         }
@@ -374,8 +428,9 @@ public class PlaybackService extends Service {
         widgetArtist = artist;
         widgetAlbum = album;
         widgetPlaying = playing;
+        widgetLiked = liked;
         widgetArtVersion = artVersion;
-        WavelengthWidget.publish(this, title, artist, album, playing);
+        WavelengthWidget.publish(this, title, artist, album, playing, liked);
         saveNowSnapshot();
     }
 
@@ -512,6 +567,9 @@ public class PlaybackService extends Service {
                 commandIntent(playing ? "pause" : "play", 2)).build())
             .addAction(new Notification.Action.Builder(
                 android.R.drawable.ic_media_next, "Next", commandIntent("next", 3)).build())
+            .addAction(new Notification.Action.Builder(
+                liked ? R.drawable.ic_heart_filled : R.drawable.ic_heart,
+                liked ? "Unlike" : "Like", commandIntent("like", 4)).build())
             .setStyle(new Notification.MediaStyle()
                 .setMediaSession(session == null ? null : session.getSessionToken())
                 .setShowActionsInCompactView(0, 1, 2));
@@ -581,6 +639,11 @@ public class PlaybackService extends Service {
         widgetArtist = "";
         widgetAlbum = "";
         widgetPlaying = false;
+        widgetLiked = false;
+        liked = false;
+        position = 0;
+        duration = 0;
+        widgetPosBucket = -1;
         widgetArtVersion = -1;
         artVersion++;
         WavelengthWidget.clear(this);

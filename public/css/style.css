@@ -1605,3 +1605,122 @@ html:is([data-read=large],[data-read=xl]) .qbadge{font-size:10px;padding:3px 8px
   .recap-dates input{width:100%}
   .recap-dates .btn{width:100%;justify-content:center}
 }
+
+/* ══════════════════════════════════════════════
+   QUALITY-OF-LIFE ADDITIONS
+══════════════════════════════════════════════ */
+.toast.has-undo{pointer-events:auto;display:flex;align-items:center;gap:14px;padding-right:10px}
+.toast-undo{padding:6px 14px;border-radius:999px;background:var(--accent);color:var(--on-accent,#fff);font:700 11px var(--font-m);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;border:0}
+.toast-undo:hover{filter:brightness(1.1)}
+.q-h>div{display:flex;align-items:center;gap:6px}
+.qgrip{display:grid;place-items:center;width:20px;flex:none;color:var(--text3);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;opacity:.55;transition:opacity .2s,color .2s}
+.qgrip svg{width:16px;height:16px}
+.qi:hover .qgrip,.qi.drag .qgrip{opacity:1;color:var(--text2)}
+.qi.drag{background:var(--card2);box-shadow:0 14px 30px -16px rgba(0,0,0,.8);transform:scale(1.02);z-index:2;position:relative}
+.qi.drop-above{box-shadow:inset 0 3px 0 var(--accent)}
+.qi.drop-below{box-shadow:inset 0 -3px 0 var(--accent)}
+.list-tools .pl-find{flex:1 1 220px;min-width:170px;max-width:340px}
+.row.swiping{transition:none;position:relative}
+.row.swiping::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:inset 0 0 0 1px var(--line)}
+.row[data-swipe=queue]{background:rgba(var(--accent-rgb),.18)}
+.row[data-swipe=like]{background:rgba(255,79,163,.2)}
+@media (pointer:coarse){
+  .row{touch-action:pan-y}
+  .qgrip{width:28px;opacity:.8}
+}
+#b-sleep.on{background:var(--invert);color:var(--on-invert);border-color:transparent}
+
+/* ══════════════════════════════════════════════
+   MOTION v2
+   Calm, unhurried, never bouncy. Two curves do the work:
+     --spring  travel: a soft departure, clear middle, long settle
+     --soft    arrival from nowhere: lands slowly, no overshoot
+   Hover answers with colour, not movement. Press answers at once and small.
+   Things arrive whole from just above and leave the way they came.
+   (Modelled on the stageshow motion rules.)
+══════════════════════════════════════════════ */
+:root{
+  --spring:cubic-bezier(.45,0,.1,1);
+  --soft:cubic-bezier(.25,.8,.25,1);
+  --press:cubic-bezier(.3,.75,.1,1);
+}
+
+/* Android and touch browsers draw a tinted box on every tap. Wavelength has
+   its own pressed states, so switch the system one off everywhere. */
+*{-webkit-tap-highlight-color:transparent}
+html:not([data-kbd]) :focus,html:not([data-kbd]) :focus-visible{outline:none!important}
+html[data-kbd] :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button,[role=button],[data-act],[data-go],.row,.tile,.qi,.spl{-webkit-touch-callout:none}
+button{-webkit-appearance:none;appearance:none}
+
+/* page changes: the old view clears, the new one rises 8px and settles */
+@keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.view.out{opacity:0;transform:none;filter:none;transition:opacity .1s linear}
+.view.in{animation:viewIn .28s var(--soft) both}
+
+/* lists and grids arrive in reading order, 50ms apart */
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.rise{animation:rise .7s var(--soft) both;animation-delay:calc(var(--i,0)*50ms)}
+@keyframes skIn{from{opacity:0}to{opacity:1}}
+
+/* small accents settle, never spring */
+@keyframes pop{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:none}}
+.nav a.on::after{animation:pop .45s var(--soft)}
+@keyframes beat{0%{transform:scale(1)}40%{transform:scale(1.14)}100%{transform:scale(1)}}
+.ib.hrt.on svg{animation:beat .5s var(--soft)}
+@keyframes swap{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.p-meta.swap{animation:swap .45s var(--soft)}
+
+/* nothing idles for show: no bobbing art, no spinning disc, no pulsing ring */
+@keyframes ring{to{}}
+.np-art{animation:none}
+.p-art .art{animation:none}
+body.playing .pp{animation:none;box-shadow:0 0 0 6px rgba(var(--accent-rgb),.14),0 12px 28px -10px rgba(var(--accent-rgb),.55)}
+@keyframes drift{to{transform:translate(4vmax,3vmax) scale(1.06)}}
+.ambient i{animation-duration:60s}
+
+/* hover is colour only */
+.btn:hover,.chip:hover,.ib:hover,.tile:hover,.ph .cover:hover,.theme-card:hover,.set-jump button:hover,
+.recent-search:hover,.search-top:hover,.set-overview button:hover,.icon-grid button:hover,.list.grid .row:hover,
+.pp:hover,.tile .fab:hover,.searchbox .search-clear:hover,.imp-cover-col .cover:hover,
+.nav a:hover,.spl:hover,.row:hover,.qi:hover,.pick:hover,.prow:hover,.menu button:hover{transform:none}
+.emo button:hover,.sw button:hover,.tone-dot:hover,.swatch-row .sw button:hover{transform:scale(1.06)}
+.tile:hover{box-shadow:0 20px 40px -26px rgba(0,0,0,.6)}
+.row .n .pl{transform:none}
+.fab{transform:translateY(8px);transition:opacity .25s,transform .45s var(--soft),background .2s}
+.tile:hover .fab,.tile:focus-within .fab{transform:none}
+.dt i::after{transform:scale(0);transition:transform .3s var(--soft)}
+
+/* press feedback starts on the input and is quick */
+.btn:active,.chip:active,.tile:active,.search-top:active,.recent-search:active,.theme-card:active,.set-overview button:active{transform:scale(.97);transition-duration:.1s}
+.ib:active{transform:scale(.9);transition-duration:.1s}
+.pp:active{transform:scale(.94);transition-duration:.1s}
+.row:active,.spl:active,.qi:active,.pick:active,.prow:active,.menu button:active,.nav a:active,.mnav a:active{transform:scale(.99);transition-duration:.1s}
+
+/* overlays: arrive whole from just above their place, leave by fading */
+.sheet{opacity:0;transform:translateY(-10px);transition:transform .4s var(--soft),opacity .22s linear}
+.modal.open .sheet{opacity:1;transform:none}
+.menu{transform:translateY(-6px);transition:opacity .16s linear,transform .3s var(--soft)}
+.menu.open{transform:none}
+.toast{transform:translate(-50%,-12px);transition:opacity .22s linear,transform .45s var(--soft)}
+.toast.show{transform:translate(-50%,0)}
+.queue{transform:translateX(calc(100% + 30px));transition:transform .55s var(--spring),opacity .3s linear}
+.queue.open{transform:none}
+.np{transform:translateY(24px);filter:none;transition:opacity .35s linear,transform .6s var(--soft)}
+.np.open{transform:none;filter:none}
+
+/* ══════════════════════════════════════════════
+   VISUALIZER STYLE GALLERY
+══════════════════════════════════════════════ */
+.viz-sheet{width:min(880px,94vw)}
+.viz-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:12px;margin:16px 0 20px}
+.viz-card{display:flex;flex-direction:column;gap:4px;padding:8px 8px 12px;border-radius:22px;border:1px solid var(--line);background:var(--card2);text-align:left;cursor:pointer;transition:border-color .2s,background .2s,box-shadow .25s}
+.viz-card:hover{background:var(--card);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.viz-card.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.viz-card canvas{display:block;width:100%;aspect-ratio:16/10;border-radius:15px;background:color-mix(in srgb,var(--bg) 60%,#000)}
+.viz-card .vc-n{margin-top:6px;padding:0 4px;font:700 11px var(--font-m);letter-spacing:.08em;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.viz-card.on .vc-n::after{content:"In use";margin-left:auto;font:700 9px var(--font-m);letter-spacing:.08em;color:var(--on-accent);background:var(--accent);padding:2px 8px;border-radius:99px}
+.viz-card .vc-h{padding:0 4px;font:400 11px var(--font-m);color:var(--text2)}
+.viz-now{display:flex;align-items:center;gap:10px}
+@media (max-width:520px){.viz-gal{grid-template-columns:repeat(2,1fr);gap:9px}.viz-card .vc-h{display:none}}
+[data-motion=reduced] .viz-card canvas{opacity:.9}

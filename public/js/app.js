@@ -141,6 +141,7 @@ const I = {
   mix: P('<path d="M4 7h4l8 10h4"/><path d="m17 14 3 3-3 3"/><path d="M4 17h4l2-2.5"/><path d="m17 4 3 3-3 3"/><path d="M13 9.5 15 7h1"/>'),
   clock: P('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>'),
   block: P('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
+  grip: P('<circle cx="9" cy="6" r="1.1"/><circle cx="15" cy="6" r="1.1"/><circle cx="9" cy="12" r="1.1"/><circle cx="15" cy="12" r="1.1"/><circle cx="9" cy="18" r="1.1"/><circle cx="15" cy="18" r="1.1"/>'),
 };
 const GENRES = ['Pop', 'Hip-Hop', 'Rock', 'Electronic', 'Lo-Fi', 'Jazz', 'R&B', 'Indie', 'Metal', 'K-Pop', 'Latin', 'Afrobeats', 'Classical', 'Country'];
 const RECENT_SEARCH_KEY = 'wl-recent-searches';
@@ -160,11 +161,49 @@ function rememberSearch(q) {
 }
 
 /* ═════════ state ═════════ */
-const DEF = { playlists: [], liked: [], history: [], listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list' } };
+const DEF = { playlists: [], liked: [], history: [], listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list', swipeRows: true } };
 let S = structuredClone(DEF);
 const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null, playCtx: '', viewList: null, recapYear: new Date().getFullYear(), recapFrom: '', recapTo: '', infoCache: {}, credits: null, creditDone: '', listenTick: 0, normGain: 1, normReady: 0, remix: null };
 let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api('/api/state', { method: 'PUT', json: S }).catch(() => {}), 400); };
-let toastT; const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800); };
+let toastT;
+const toast = (m, undo) => {
+  const t = $('#toast');
+  t.textContent = m;
+  R.undo = typeof undo === 'function' ? undo : null;
+  t.classList.toggle('has-undo', !!R.undo);
+  if (R.undo) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'toast-undo'; b.dataset.act = 'toast-undo'; b.textContent = 'Undo';
+    t.appendChild(b);
+  }
+  t.classList.add('show'); clearTimeout(toastT);
+  toastT = setTimeout(() => { t.classList.remove('show'); R.undo = null; }, R.undo ? 7000 : 2800);
+};
+/* Destructive actions apply immediately and can be taken back for a few
+   seconds. `commit` runs once the window closes (for example, deleting an
+   uploaded cover file that an undo would still need). */
+function flushUndo(only) {
+  const rec = R.undoRec;
+  if (!rec || (only && rec !== only)) return;
+  clearTimeout(rec.timer); R.undoRec = null;
+  if (!rec.done) { rec.done = true; if (rec.commit) rec.commit(); }
+}
+function undoable(msg, undo, commit) {
+  flushUndo();
+  const rec = { done: false, commit, timer: 0 };
+  R.undoRec = rec;
+  toast(msg, () => {
+    if (rec.done) return;
+    rec.done = true; clearTimeout(rec.timer); R.undoRec = null;
+    undo();
+  });
+  rec.timer = setTimeout(() => flushUndo(rec), 7200);
+}
+function runUndo() {
+  const u = R.undo; if (!u) return false;
+  R.undo = null; $('#toast').classList.remove('show'); u();
+  return true;
+}
 
 /* ═════════ device identity & listening stats ═════════ */
 /* Listening time is counted on the device that actually played the song, then
@@ -570,8 +609,16 @@ function rows(list, ctx, offset = 0) {
     <button class="ib hrt${liked(t) ? ' on' : ''}" data-act="like" title="Like">${liked(t) ? I.heartF : I.heart}</button>
     <button class="ib" data-act="menu" title="More">${I.more}</button></div>`).join('');
 }
+/* The in-playlist filter keeps row indexes consistent: every row looks its song
+   up through ctxList(), so the filter lives here instead of in the markup. */
+const filterActive = c => !!R.plFilter && (c === 'liked' ? curRoute === 'liked' : curRoute === 'playlist' && c === curArg);
+const matchesFilter = t => {
+  const hay = `${t.title || ''} ${t.artist || ''} ${t.album || ''}`.toLowerCase();
+  return R.plFilter.split(/\s+/).every(w => hay.includes(w));
+};
 function ctxList(c) {
-  const clean = l => (S.settings.noAi || (S.settings.blockedArtists || []).length) ? l.filter(allowed) : l;
+  const clean0 = l => (S.settings.noAi || (S.settings.blockedArtists || []).length) ? l.filter(allowed) : l;
+  const clean = l => filterActive(c) ? clean0(l).filter(matchesFilter) : clean0(l);
   if (c === 'liked') return sortTracks(clean(S.liked));
   if (c === 'search') return R.results;
   if (c === 'history') return clean(S.history);
@@ -592,17 +639,38 @@ function sortTracks(list, key = S.settings.plSort || 'added') {
   }[key];
   return cmp ? arr.sort(cmp) : arr;
 }
+function queueRemove(i) {
+  if (i < 0 || i >= R.queue.length) return;
+  const [gone] = R.queue.splice(i, 1), oldIdx = R.idx, lenAfter = R.queue.length;
+  if (i <= R.idx) R.idx--;
+  refreshQueue(); renderQueue(); saveSession(true);
+  undoable(`Removed “${gone.title}” from the queue`, () => {
+    R.queue.splice(Math.min(i, R.queue.length), 0, gone);
+    R.idx = R.queue.length - 1 === lenAfter ? oldIdx : (i <= R.idx ? R.idx + 1 : R.idx);
+    refreshQueue(); renderQueue(); saveSession(true);
+  });
+}
+function moveQueue(from, to) {
+  if (from === to || from < 0 || to < 0 || from >= R.queue.length || to >= R.queue.length) return;
+  const [it] = R.queue.splice(from, 1); R.queue.splice(to, 0, it);
+  if (R.idx === from) R.idx = to;
+  else if (from < R.idx && to >= R.idx) R.idx--;
+  else if (from > R.idx && to <= R.idx) R.idx++;
+  refreshQueue(); renderQueue(); saveSession(true);
+}
 function removeFromCtx(c, t) {
   const same = x => uid(x) === uid(t);
-  if (c === 'liked') S.liked = S.liked.filter(x => !same(x));
-  else if (c === 'history') S.history = S.history.filter(x => !same(x));
-  else if (c === 'queue') { const i = R.queue.findIndex(same); if (i >= 0) { R.queue.splice(i, 1); if (i <= R.idx) R.idx--; } }
-  else if (c === 'local') return deleteLocalTrack(t);
+  if (c === 'queue') return queueRemove(R.queue.findIndex(same));
+  if (c === 'local') return deleteLocalTrack(t);
+  let undo = null;
+  if (c === 'liked') { const prev = S.liked; S.liked = prev.filter(x => !same(x)); undo = () => { S.liked = prev; }; }
+  else if (c === 'history') { const prev = S.history; S.history = prev.filter(x => !same(x)); undo = () => { S.history = prev; }; }
   else {
     const pl = S.playlists.find(p => p.id === c);
-    if (pl) pl.tracks = pl.tracks.filter(x => !same(x));
+    if (pl) { const prev = pl.tracks; pl.tracks = prev.filter(x => !same(x)); undo = () => { pl.tracks = prev; }; }
   }
   save(); drawSide(); hl(); if (curRoute !== 'search') draw(); saveSession(true);
+  if (undo) undoable(`Removed “${t.title}”`, () => { undo(); save(); drawSide(); hl(); if (curRoute !== 'search') draw(); saveSession(true); });
 }
 
 /* ═════════ views ═════════ */
@@ -612,7 +680,10 @@ function vHome() {
     <h1 class="big">WAVE<br>LENGTH</h1><p>${NATIVE ? 'Search YouTube, play ad-free, and keep your playlists on this phone. A computer is optional.' : 'Bring your Spotify playlists over, play them ad-free, and download anything as MP3.'}</p>
     <div class="acts">${NATIVE
       ? `<button class="btn solid" data-go="search">${I.search}Search music</button><button class="btn" data-go="import">${I.import}Import a list</button>`
-      : `<button class="btn solid" data-go="import">${I.import}Import from Spotify</button><button class="btn" data-go="search">${I.search}Search music</button>`}</div></div>
+      : `<button class="btn solid" data-go="import">${I.import}Import from Spotify</button><button class="btn" data-go="search">${I.search}Search music</button>`}
+      ${R.cur && !R.playing ? `<button class="btn acc" data-act="resume">${I.playS}Resume</button>` : ''}
+      ${S.liked.length ? `<button class="btn" data-act="playliked">${I.heartF}Play liked</button>` : ''}
+      ${S.playlists.some(p => p.tracks.length) ? `<button class="btn" data-act="smartshuffle">${I.shuffle}Smart shuffle</button>` : ''}</div></div>
     ${h.length ? `<div class="sec"><h2>Jump back in</h2></div><div class="grid">${h.map((t, i) => tile(art(t), t.title, t.artist, `data-act="playhist" data-i="${i}"`, i)).join('')}</div>` : ''}
     ${pls.length ? `<div class="sec"><h2>Your playlists</h2><a data-go="library">See all</a></div><div class="grid">${pls.map((p, i) => plTile(p, i)).join('')}</div>`
       : `<div class="sec"><h2>Start here</h2></div><div class="empty">No playlists yet. Import one from Spotify or create your own from the sidebar.</div>`}`;
@@ -720,15 +791,64 @@ function vPlaylist(id) {
       <div class="acts"><button class="btn acc" data-act="playall" data-id="${id}">${I.playS}Play</button>
         <button class="btn" data-act="shufflepl" data-id="${id}">${I.shuffle}Shuffle</button>
         ${NATIVE ? '' : `<button class="btn" data-act="dlall" data-id="${id}">${I.dl}Download all</button>`}
+        <button class="btn" data-act="plmore" data-id="${id}" aria-haspopup="menu">${I.more}More</button>
         ${isL ? '' : `<button class="btn" data-act="editpl" data-id="${pl.id}">${I.image}Edit</button><button class="btn dng" data-act="delpl" data-id="${pl.id}">${I.trash}Delete</button>`}
         ${un ? `<button class="btn" data-act="matchrest" data-id="${id}">Match ${un} remaining</button>` : ''}</div>
       <div class="matchbar${MQ.total ? ' on' : ''}" id="match-bar"><div class="lbl" id="match-lbl"></div><div class="dtw" style="pointer-events:none"><div class="dt"><i id="match-fill"></i></div></div></div>
     </div></div>
     <div class="list-tools">
+      ${pl.tracks.length > 6 ? `<input class="inp pl-find" id="pl-find" type="search" placeholder="Filter this ${isL ? 'list' : 'playlist'}" value="${esc(R.plFilter)}" autocomplete="off" spellcheck="false" aria-label="Filter songs">` : ''}
       <div class="chips sort-chips" aria-label="Sort songs">${SORT_KEYS.map(([k, n]) => `<button class="chip${(S.settings.plSort || 'added') === k ? ' on' : ''}" data-act="pl-sort" data-k="${k}">${n}</button>`).join('')}</div>
       <div class="view-switch" role="group" aria-label="View"><button class="chip${(S.settings.plView || 'list') === 'list' ? ' on' : ''}" data-act="pl-view" data-k="list">List</button><button class="chip${S.settings.plView === 'grid' ? ' on' : ''}" data-act="pl-view" data-k="grid">Grid</button></div>
     </div>
-    <div class="list${S.settings.plView === 'grid' ? ' grid' : ''}">${tracks.length ? rows(tracks, id) : '<div class="empty">Empty for now. Use the ••• menu on any song to add it here.</div>'}</div>`;
+    <div class="list${S.settings.plView === 'grid' ? ' grid' : ''}" id="pl-list">${plRowsHTML(tracks, id)}</div>`;
+}
+const plRowsHTML = (tracks, id) => tracks.length ? rows(tracks, id)
+  : R.plFilter ? `<div class="empty">No songs match “${esc(R.plFilter)}”.</div>`
+  : '<div class="empty">Empty for now. Use the ••• menu on any song to add it here.</div>';
+function repaintPlaylist() {
+  const box = $('#pl-list'); if (!box) return;
+  const id = curRoute === 'liked' ? 'liked' : curArg;
+  box.innerHTML = plRowsHTML(ctxList(id), id);
+  hl(); requestAnimationFrame(observeRows);
+}
+function playlistTracks(id) {
+  return id === 'liked' ? S.liked : ((S.playlists.find(p => p.id === id) || {}).tracks || []);
+}
+const dupKey = t => t.localId ? 'l:' + t.localId : t.ytId ? 'y:' + t.ytId : t.spId ? 's:' + t.spId
+  : 'n:' + String(t.title || '').toLowerCase().replace(/\W+/g, '') + '|' + String(t.artist || '').toLowerCase().replace(/\W+/g, '');
+function playlistMore(el) {
+  const id = el.dataset.id, b = el.getBoundingClientRect();
+  const visible = ctxList(id);
+  const live = () => visible.filter(t => !t.miss);
+  const items = [
+    ['Add to queue', 'queue', () => {
+      const l = live(); if (!l.length) return toast('Nothing playable here');
+      if (!R.cur) return play(l, 0, id);
+      R.queue.push(...l.map(t => ({ ...t, auto: false }))); refreshQueue(); renderQueue(); saveSession(true);
+      toast(`Added ${plural(l.length, 'song')} to the queue`);
+    }],
+    ['Play next', 'next', () => {
+      const l = live(); if (!l.length) return toast('Nothing playable here');
+      if (!R.cur) return play(l, 0, id);
+      R.queue.splice(R.idx + 1, 0, ...l.map(t => ({ ...t, auto: false }))); refreshQueue(); renderQueue(); saveSession(true);
+      toast(`Playing ${plural(l.length, 'song')} next`);
+    }],
+    ['Remove duplicates', 'trash', () => {
+      const all = playlistTracks(id), seen = new Set(), keep = [];
+      for (const t of all) { const k = dupKey(t); if (seen.has(k)) continue; seen.add(k); keep.push(t); }
+      const gone = all.length - keep.length;
+      if (!gone) return toast('No duplicates found');
+      const apply = list => { if (id === 'liked') S.liked = list; else { const p = S.playlists.find(x => x.id === id); if (p) p.tracks = list; } save(); drawSide(); refreshView(); };
+      apply(keep);
+      undoable(`Removed ${plural(gone, 'duplicate')}`, () => apply(all));
+    }],
+    ['Copy song list', 'copy', () => {
+      const l = playlistTracks(id);
+      copyText(l.map(t => `${t.title} — ${t.artist || 'Unknown artist'}`).join('\n'));
+    }],
+  ];
+  showMenuItems(items, b.left, b.bottom + 6);
 }
 
 const fmtDuration = sec => {
@@ -1221,7 +1341,7 @@ function vSet() {
       ${tg('viz', 'Show visualizer', NATIVE
         ? 'Follows playback on the phone. Android does not expose the WebView’s audio samples, so the motion is generated from the track and the playback clock.'
         : 'Reacts to the real audio, not a fake animation.')}
-      <div class="line"><div class="l">Visualizer style</div><select class="inp" data-set="vizStyle" aria-label="Visualizer style">${['matrix', 'bars', 'wave', 'radial'].map(v => `<option value="${v}"${s.vizStyle === v ? ' selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></div>
+      <div class="line"><div><div class="l">Visualizer style</div><div class="s" id="viz-style-name">${esc(WLViz.name(vizStyleId()))} · ${plural(WLViz.styles.length, 'style')}</div></div><button class="btn" data-act="viz-gallery">Preview styles</button></div>
       <div class="line"><div><div class="l">Visualizer size</div><div class="s">Full screen turns the visualizer into the backdrop of the player.</div></div><select class="inp" data-set="vizSize" aria-label="Visualizer size">${[['sm', 'Small'], ['md', 'Medium'], ['lg', 'Large'], ['full', 'Full screen']].map(([v, n]) => `<option value="${v}"${(s.vizSize || 'md') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
       ${NATIVE ? `${tg('lockVisualizer', 'Lock-screen now playing', 'When you lock the phone during playback, Wavelength briefly shows the artwork, the song and a visualizer over the lock screen.')}
       <div class="line"><div><div class="l">Lock-screen preview</div><div class="s">Open the brief now-playing screen without locking the phone.</div></div><button class="btn" data-act="preview-lock">Preview</button></div>
@@ -1234,6 +1354,7 @@ function vSet() {
         ? 'Samples the start of each song and turns loud songs down a little. It never boosts above your volume, so quiet songs stay quiet. Best-effort, not a studio master.'
         : 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
       ${tg('skipCredits', 'Skip credits &amp; outros', 'Best effort. Only skips when the video’s own chapter or segment data clearly labels a credits/outro section.')}
+      ${tg('swipeRows', 'Swipe songs for quick actions', 'On touch screens, swipe a song right to play it next or left to like it.')}
       ${tg('headphonesPause', 'Pause when headphones disconnect', NATIVE ? 'Android pauses playback when Bluetooth or wired audio disconnects.' : 'Best effort in the browser. Android handles this natively.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
       <div class="line"><div><div class="l">Sleep timer</div><div class="s" id="sleep-status">${sleepText()}</div></div><select class="inp" data-set="sleep" aria-label="Sleep timer">${rem ? `<option value="active" selected>${sleepLabel(rem)} left</option>` : ''}<option value="0">Off</option>${sleepOpts}</select></div></div>
@@ -1298,6 +1419,7 @@ async function route() {
   const my = ++routeTok, v = $('#view');
   if (drawn) { v.classList.add('out'); await sleep(motionReduced() ? 0 : 80); if (my !== routeTok) return; }
   curRoute = V[name] ? name : 'home'; curArg = decodeURIComponent(rest.join('/'));
+  R.plFilter = '';
   $$('.nav a,.mnav a').forEach(a => {
     const r = a.dataset.r || (a.dataset.go || '').split('/')[0];
     const on = r === curRoute || ((curRoute === 'liked' || curRoute === 'playlist' || curRoute === 'local') && r === 'library');
@@ -1488,9 +1610,32 @@ function sleepText() {
   const rem = sleepLeft();
   return rem ? `Pausing in ${sleepLabel(rem)}` : 'Off';
 }
+function updateSleepBtn() {
+  const b = $('#b-sleep'); if (!b) return;
+  const rem = sleepLeft();
+  b.textContent = R.sleepAfterSong ? 'Sleep · end of song' : rem ? `Sleep · ${sleepLabel(rem)}` : 'Sleep';
+  b.classList.toggle('on', !!(R.sleepAfterSong || rem));
+}
+function setSleep(min) {
+  R.sleepAfterSong = false;
+  S.settings.sleepUntil = min ? Date.now() + min * 60000 : 0;
+  save(); syncSleep();
+  toast(min ? `Sleep timer: pausing in ${sleepLabel(min * 60000)}` : 'Sleep timer off');
+  if (curRoute === 'settings') draw();
+}
+function sleepMenu(x, y) {
+  const items = [15, 30, 45, 60].map(m => [sleepLabel(m * 60000), 'clock', () => setSleep(m)]);
+  items.push(['After this song', 'clock', () => {
+    S.settings.sleepUntil = 0; save(); syncSleep();
+    R.sleepAfterSong = true; updateSleepBtn(); toast('Sleep timer: stopping after this song');
+  }]);
+  if (sleepLeft() || R.sleepAfterSong) items.push(['Turn timer off', 'close', () => setSleep(0)]);
+  showMenuItems(items, x, y);
+}
 function syncSleep() {
   clearTimeout(R.sleepT); clearInterval(R.sleepTick);
   const el = $('#sleep-status'); if (el) el.textContent = sleepText();
+  updateSleepBtn();
   const rem = sleepLeft();
   if (!rem) {
     if (S.settings.sleepUntil) { S.settings.sleepUntil = 0; save(); }
@@ -1504,12 +1649,13 @@ function syncSleep() {
   }, rem);
   R.sleepTick = setInterval(() => {
     const node = $('#sleep-status'); if (node) node.textContent = sleepText();
+    updateSleepBtn();
     if (!sleepLeft()) syncSleep();
   }, 15000);
 }
 let vizRaf = 0, vizLast = 0, vizPrev = 0, vizStep = 0.035, phase = 0, disp = [];
 let vizW = 0, vizH = 0, vizDpr = 1, vizRO = null;
-const VSTYLES = ['matrix', 'bars', 'wave', 'radial'];
+const VSTYLES = WLViz.ids;
 const VIZ_SIZES = ['sm', 'md', 'lg', 'full'];
 /* Android plays through the WebView's native player, which never exposes
    samples to Web Audio. Instead of freezing, the phone draws a track-seeded
@@ -1552,7 +1698,7 @@ function vizLoop(ts) {
   const fps = motionReduced() ? 15 : active ? 30 : 15;
   if (ts - vizLast < 1000 / fps - 1) return;
   const dt = Math.min(0.09, (ts - (vizPrev || ts)) / 1000);
-  vizPrev = ts; vizLast = ts; vizStep = Math.max(0.012, dt * 2.1);
+  vizPrev = ts; vizLast = ts; vizStep = Math.max(0.012, dt * 2.1); vizRealDt = Math.max(0.008, dt);
   const c = $('#viz'); if (!c || !vizW || !vizH) return;
   drawViz(c, c.getContext('2d'));
 }
@@ -1562,7 +1708,7 @@ function vizSync() {
   const size = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md';
   document.documentElement.dataset.vizSize = size;
   $('#viz').style.display = S.settings.viz ? '' : 'none';
-  $('#b-viz').textContent = S.settings.vizStyle[0].toUpperCase() + S.settings.vizStyle.slice(1);
+  $('#b-viz').textContent = WLViz.name(vizStyleId());
   const full = $('#b-viz-full');
   if (full) {
     full.textContent = size === 'full' ? 'Exit full screen' : 'Full screen';
@@ -1576,53 +1722,84 @@ function vizSync() {
   }
   if (!on && vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = 0; }
 }
+/* Every style lives in viz.js and draws through one shared context. This
+   file only decides where the numbers come from: the live analyser on
+   desktop, or the track-seeded model on Android. */
+const vizSource = {
+  level: (i, n) => {
+    if (!NATIVE && analyser && R.playing) return Math.min(1, (freq[Math.floor(Math.pow(i / n, 1.55) * freq.length * 0.7) + 1] / 255) * 1.12);
+    if (NATIVE && R.playing) return WLViz.synthLevelAt(i, n, phase, vizSeed * 6.283);
+    return 0.06 + 0.04 * Math.sin(phase * 2 + i * 0.55);
+  },
+  wave: u => {
+    if (!NATIVE && analyser && R.playing) return (wave[Math.floor(u * (wave.length - 1))] - 128) / 128;
+    if (NATIVE && R.playing) return WLViz.synthWaveAt(u, phase, vizSeed * 6.283);
+    return Math.sin(u * vizW / 38 + phase * 2) * 0.08;
+  },
+};
+const vizCtx = WLViz.makeCtx(vizSource);
+let vizCtxStyle = '', vizRealDt = 0.033;
+const vizStyleId = () => WLViz.has(S.settings.vizStyle) ? S.settings.vizStyle : 'matrix';
 function drawViz(c, g) {
   const w = vizW, h = vizH, dpr = vizDpr;
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
   const real = !NATIVE && analyser && R.playing;
-  const synth = NATIVE && R.playing;
   vizSeedFor(R.cur);
   phase += vizStep;
   if (real) { analyser.getByteFrequencyData(freq); analyser.getByteTimeDomainData(wave); }
-  const level = (i, n) => real ? Math.min(1, (freq[Math.floor(Math.pow(i / n, 1.55) * freq.length * 0.7) + 1] / 255) * 1.12)
-    : synth ? synthLevel(i, n)
-    : 0.06 + 0.04 * Math.sin(phase * 2 + i * 0.55);
-  const ease = (i, v) => (disp[i] = (disp[i] ?? v) + (v - (disp[i] ?? v)) * 0.32);
-  const st = S.settings.vizStyle; g.fillStyle = g.strokeStyle = VC.accent;
-  if (st === 'matrix') {
-    const cols = 34, rows = 11, cell = Math.min(w / cols, h / rows), ox = (w - cell * cols) / 2, oy = (h - cell * rows) / 2, r = cell * 0.3;
-    for (let x = 0; x < cols; x++) {
-      const lit = Math.round(ease(x, level(x, cols)) * rows);
-      for (let y = 0; y < rows; y++) {
-        const on = y >= rows - lit;
-        g.fillStyle = on ? VC.accent : VC.dim;
-        g.beginPath(); g.arc(ox + x * cell + cell / 2, oy + y * cell + cell / 2, on ? r * 1.08 : r * 0.62, 0, 6.283); g.fill();
-      }
-    }
-  } else if (st === 'bars') {
-    const n = 44, bw = w / n;
-    for (let i = 0; i < n; i++) {
-      const bh = Math.max(6, ease(i, level(i, n)) * h * 0.95), x = i * bw + bw * 0.2, rr = bw * 0.3;
-      g.beginPath(); g.roundRect(x, h - bh, bw * 0.6, bh, rr); g.fill();
-    }
-  } else if (st === 'wave') {
-    const amp = synth ? 0.08 + 0.34 * Math.pow(0.5 + 0.5 * Math.sin(phase * 3.05 + vizSeed * 6.283), 2) : 0;
-    g.lineWidth = 3; g.lineCap = g.lineJoin = 'round'; g.shadowColor = VC.accent; g.shadowBlur = 14; g.beginPath();
-    for (let x = 0; x <= w; x += 3) {
-      const v = real ? (wave[Math.floor(x / w * (wave.length - 1))] - 128) / 128
-        : synth ? Math.sin(x / w * 21 + phase * 3.1) * amp * (0.55 + 0.45 * Math.sin(x / w * 4.7 + phase * 0.8))
-        : Math.sin(x / 38 + phase * 2) * 0.08;
-      const y = h / 2 + v * h * 0.46; x ? g.lineTo(x, y) : g.moveTo(x, y);
-    }
-    g.stroke(); g.shadowBlur = 0;
-  } else {
-    const n = 72, cx = w / 2, cy = h / 2, r0 = Math.min(w, h) * 0.26; g.lineWidth = 3; g.lineCap = 'round';
-    for (let i = 0; i < n; i++) {
-      const a = i / n * 6.283 - 1.5708 + phase * 0.15, l = 4 + ease(i, level(i < n / 2 ? i : n - i, n / 2)) * r0 * 1.15;
-      g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * (r0 + l), cy + Math.sin(a) * (r0 + l)); g.stroke();
-    }
-  }
+  const st = vizStyleId();
+  if (st !== vizCtxStyle) { vizCtxStyle = st; vizCtx.state = {}; }
+  vizCtx.begin(w, h, phase, vizRealDt, VC.accent, VC.dim);
+  g.fillStyle = g.strokeStyle = VC.accent;
+  WLViz.draw(st, g, vizCtx);
   g.globalAlpha = 1;
+}
+
+/* ── style gallery: every style previewed live ────────────────────────── */
+let galRaf = 0, galCards = [];
+function stopVizGallery() { if (galRaf) cancelAnimationFrame(galRaf); galRaf = 0; galCards = []; }
+function vizGallery() {
+  const cur = vizStyleId();
+  modal(`<div class="eyebrow">Visualizer</div><h3 class="imp-title">Choose a style</h3>
+    <p class="mut">${plural(WLViz.styles.length, 'style')}, previewed live in your accent colour. Tap one to use it.${NATIVE ? ' The lock screen draws the closest of the four classic looks.' : ''}</p>
+    <div class="viz-gal" id="viz-gal">${WLViz.styles.map(s => `<button class="viz-card${s.id === cur ? ' on' : ''}" data-act="viz-pick" data-id="${s.id}" aria-pressed="${s.id === cur}" aria-label="${esc(s.name)}. ${esc(s.hint)}"><canvas aria-hidden="true"></canvas><span class="vc-n">${esc(s.name)}</span><span class="vc-h">${esc(s.hint)}</span></button>`).join('')}</div>
+    <div class="acts end"><button class="btn solid" data-act="close-modal">Done</button></div>`, 'viz-sheet');
+  startVizGallery();
+}
+function startVizGallery() {
+  stopVizGallery();
+  const grid = $('#viz-gal'); if (!grid) return;
+  galCards = $$('.viz-card', grid).map(el => {
+    let ctx;
+    const seed = 2.1;
+    ctx = WLViz.makeCtx({
+      level: (i, n) => Math.min(1, Math.pow(WLViz.synthLevelAt(i, n, ctx.t, seed), 0.8) * 1.28),
+      wave: u => WLViz.synthWaveAt(u, ctx.t, seed),
+    });
+    return { el, cv: $('canvas', el), id: el.dataset.id, ctx };
+  });
+  let last = 0, t = 0;
+  const tick = ts => {
+    galRaf = requestAnimationFrame(tick);
+    if (!$('#modal').classList.contains('open') || !$('#viz-gal')) { stopVizGallery(); return; }
+    const fps = motionReduced() ? 10 : 30;
+    if (ts - last < 1000 / fps - 1) return;
+    const dt = Math.min(0.09, last ? (ts - last) / 1000 : 0.033); last = ts; t += dt * 2.1;
+    const view = $('#modal .sheet').getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
+    for (const k of galCards) {
+      const r = k.cv.getBoundingClientRect();
+      if (r.bottom < view.top || r.top > view.bottom) continue;
+      const w = k.cv.clientWidth, h = k.cv.clientHeight; if (!w || !h) continue;
+      if (k.cv.width !== Math.round(w * dpr) || k.cv.height !== Math.round(h * dpr)) { k.cv.width = Math.round(w * dpr); k.cv.height = Math.round(h * dpr); }
+      const g = k.cv.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+      g.fillStyle = g.strokeStyle = VC.accent;
+      k.ctx.begin(w, h, t, dt, VC.accent, VC.dim);
+      WLViz.draw(k.id, g, k.ctx);
+      g.globalAlpha = 1;
+    }
+  };
+  galRaf = requestAnimationFrame(tick);
 }
 
 /* ── fullscreen output meter ───────────────────────────────────────────── */
@@ -2210,6 +2387,10 @@ function setPlaying(p) {
 }
 
 function onEnded() {
+  if (R.sleepAfterSong) {
+    R.sleepAfterSong = false; updateSleepBtn(); toast('Sleep timer: stopped after the song');
+    return;
+  }
   if (R.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); return; }
   const wantIdx = peekNextIdx();
   const want = wantIdx >= 0 ? R.queue[wantIdx] : null;
@@ -2351,7 +2532,8 @@ function mediaSession() {
         title: R.cur.title || 'Wavelength',
         artist: R.cur.artist || '',
         album: R.cur.album || 'Wavelength',
-        art: R.cur.art || ''
+        art: R.cur.art || '',
+        liked: !!liked(R.cur)
       }));
     } catch {}
     return;
@@ -2438,7 +2620,30 @@ window.wlNativeCmd = (cmd, arg) => {
     const d = isFinite(audio.duration) ? audio.duration : (R.cur && R.cur.duration) || 0;
     audio.currentTime = Math.max(0, Math.min(+arg || 0, d || Infinity));
     mediaPos(audio.currentTime, d);
+  } else if (cmd === 'like') {
+    if (R.cur) toggleLike(R.cur);
   }
+};
+
+/* Android Back button: close whatever is on top before leaving the page.
+   Returns true when the page handled it. */
+window.wlBack = () => {
+  if ($('#modal').classList.contains('open')) { closeModal(false); return true; }
+  if ($('#menu').classList.contains('open')) { closeMenu(); return true; }
+  if ($('#queue').classList.contains('open')) { $('#queue').classList.remove('open'); return true; }
+  if ($('#np').classList.contains('open')) { toggleNP(); return true; }
+  return false;
+};
+
+/* Launch commands from the widget or an app shortcut. The page may still be
+   booting when Android asks, so they wait for the first render. */
+let launchQueue = [], booted = false;
+window.wlLaunch = (cmd, arg) => {
+  if (!booted) { launchQueue.push([cmd, arg]); return; }
+  if (cmd === 'route') { if (arg) nav(String(arg)); }
+  else if (cmd === 'playliked') acts.playliked();
+  else if (cmd === 'smartshuffle') acts.smartshuffle();
+  else window.wlNativeCmd(cmd, arg);
 };
 
 /* ═════════ player UI ═════════ */
@@ -2512,9 +2717,10 @@ function toggleLike(t) {
   if (liked(t)) S.liked = S.liked.filter(x => !(uid(x) === uid(t) || (x.ytId && x.ytId === t.ytId)));
   else { S.liked.unshift({ ...t, addedAt: Date.now() }); toast('Added to Liked Songs'); }
   save(); drawSide(); hl(); if (curRoute === 'liked' || curRoute === 'library') draw();
+  if (NATIVE && R.cur && uid(R.cur) === uid(t)) { try { window.AndroidBridge.setLiked(!!liked(t)); } catch {} }
 }
 function renderQueue() {
-  $('#q-list').innerHTML = R.queue.length ? R.queue.map((t, i) => `<div class="qi${i === R.idx ? ' on' : ''}" data-qi="${i}">${art(t, 'sm')}<div class="qm"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist)}${t.localId ? ' ' + localBadge(t) : ''}${t.auto ? ' · endless' : ''}</div></div><button class="ib sm" data-act="qrm" data-i="${i}" title="Remove from queue" aria-label="Remove ${esc(t.title)} from queue">${I.close}</button></div>`).join('') : '<div class="empty">Nothing queued.</div>';
+  $('#q-list').innerHTML = R.queue.length ? R.queue.map((t, i) => `<div class="qi${i === R.idx ? ' on' : ''}" data-qi="${i}"><span class="qgrip" title="Drag to reorder" aria-hidden="true">${I.grip}</span>${art(t, 'sm')}<div class="qm"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist)}${t.localId ? ' ' + localBadge(t) : ''}${t.auto ? ' · endless' : ''}</div></div><button class="ib sm" data-act="qrm" data-i="${i}" title="Remove from queue" aria-label="Remove ${esc(t.title)} from queue">${I.close}</button></div>`).join('') : '<div class="empty">Nothing queued.</div>';
 }
 function toggleNP() { $('#np').classList.toggle('open'); vizSync(); }
 function haptic(ms = 8) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch {} }
@@ -2555,12 +2761,17 @@ function openMenu(ctx, i, x, y) {
     }
   }]);
   if (t.ytId && !t.localId) it.push(['Copy YouTube link', 'link', () => copyText('https://www.youtube.com/watch?v=' + t.ytId)]);
-  if (ctx === 'queue') it.push(['Remove from queue', 'trash', () => { R.queue.splice(i, 1); if (i <= R.idx) R.idx--; refreshQueue(); renderQueue(); saveSession(true); }]);
+  if (ctx === 'queue') it.push(['Remove from queue', 'trash', () => queueRemove(i)]);
   else if (ctx === 'local') it.push(['Delete local file', 'trash', () => deleteLocalTrack(t)]);
   else if (!['search', 'history'].includes(ctx)) it.push(['Remove from this list', 'trash', () => removeFromCtx(ctx, t)]);
+  showMenuItems(it, x, y);
+}
+function showMenuItems(it, x, y) {
   R.menu = it; const m = $('#menu');
   m.innerHTML = it.map((x, k) => `<button data-mi="${k}">${I[x[1]]}${x[0]}</button>`).join('');
-  m.style.left = Math.min(x, innerWidth - 250) + 'px'; m.style.top = Math.min(y, innerHeight - 20 - it.length * 44) + 'px'; m.classList.add('open');
+  m.style.left = Math.max(8, Math.min(x, innerWidth - 250)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - 20 - it.length * 44)) + 'px';
+  m.classList.add('open');
 }
 let modalReturn = null;
 function modal(html, cls = '') {
@@ -2574,6 +2785,7 @@ function modal(html, cls = '') {
   }, 80);
 }
 function closeModal(save_) {
+  stopVizGallery();
   const m = $('#modal');
   m.classList.remove('open'); m.setAttribute('aria-hidden', 'true');
   if (!save_) {
@@ -2967,6 +3179,7 @@ const KEY_ROWS = [
   ['Play / pause', ['Space', 'K']], ['Next / previous', ['N', 'P']], ['Seek 5 seconds', ['←', '→']],
   ['Volume', ['↑', '↓']], ['Mute', ['M']], ['Like current song', ['L']],
   ['Shuffle', ['S']], ['Repeat mode', ['R']], ['Full-screen player', ['F']], ['Queue', ['Q']],
+  ['Sleep timer', ['T']], ['Visualizer styles', ['V']], ['Undo last remove', ['⌘Z', 'Ctrl Z']],
   ['Focus search', ['/', '⌘K']], ['Shortcuts', ['?']], ['Close overlays', ['Esc']]
 ];
 function showShortcuts() {
@@ -3061,10 +3274,37 @@ const acts = {
   repeat: () => { R.repeat = (R.repeat + 1) % 3; $$('[data-act=repeat]').forEach(b => { b.innerHTML = R.repeat === 2 ? I.repeat1 : I.repeat; b.classList.toggle('on', R.repeat > 0); }); toast(['Repeat off', 'Repeat all', 'Repeat one'][R.repeat]); },
   mute: () => toggleMute(),
   queue: () => { renderQueue(); $('#queue').classList.toggle('open'); },
-  qclear: () => { R.queue = R.cur ? [R.cur] : []; R.idx = R.cur ? 0 : -1; refreshQueue(); renderQueue(); saveSession(true); },
-  qrm: el => { const i = +el.dataset.i; R.queue.splice(i, 1); if (i <= R.idx) R.idx--; refreshQueue(); renderQueue(); saveSession(true); },
+  qclear: () => {
+    if (R.queue.length < 2) return;
+    const prevQ = R.queue, prevIdx = R.idx;
+    R.queue = R.cur ? [R.cur] : []; R.idx = R.cur ? 0 : -1; refreshQueue(); renderQueue(); saveSession(true);
+    undoable('Queue cleared', () => { R.queue = prevQ; R.idx = prevIdx; refreshQueue(); renderQueue(); saveSession(true); });
+  },
+  qrm: el => queueRemove(+el.dataset.i),
+  qshuf: () => {
+    const head = R.queue.slice(0, R.idx + 1), tail = R.queue.slice(R.idx + 1);
+    if (tail.length < 2) return toast('Nothing to shuffle in Up next');
+    for (let i = tail.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tail[i], tail[j]] = [tail[j], tail[i]]; }
+    R.queue = head.concat(tail); refreshQueue(); renderQueue(); saveSession(true); toast('Up next shuffled');
+  },
+  qsave: () => {
+    const seen = new Set(), tracks = [];
+    for (const t of R.queue) { const k = dupKey(t); if (seen.has(k)) continue; seen.add(k); const { auto, ...rest } = t; tracks.push({ ...rest, addedAt: Date.now() }); }
+    if (!tracks.length) return toast('The queue is empty');
+    const stamp = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const pl = { id: rid(), name: `Queue · ${stamp}`, cover: { emoji: '🎶', tone: 'violet' }, tracks, createdAt: Date.now() };
+    S.playlists.push(pl); save(); drawSide();
+    toast(`Saved ${plural(tracks.length, 'song')} as “${pl.name}”`);
+  },
   np: toggleNP,
-  'viz-style': () => { S.settings.vizStyle = VSTYLES[(VSTYLES.indexOf(S.settings.vizStyle) + 1) % VSTYLES.length]; save(); vizSync(); syncNativePrefs(); },
+  'viz-style': () => vizGallery(),
+  'viz-gallery': () => vizGallery(),
+  'viz-pick': el => {
+    const id = el.dataset.id; if (!WLViz.has(id)) return;
+    S.settings.vizStyle = id; save(); vizSync(); syncNativePrefs();
+    $$('.viz-card').forEach(b => { const on = b.dataset.id === id; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+    const label = $('#viz-style-name'); if (label) label.textContent = `${WLViz.name(id)} · ${plural(WLViz.styles.length, 'style')}`;
+  },
   'viz-full': () => {
     if (S.settings.vizSize === 'full') S.settings.vizSize = S.settings.vizSizePrev || 'md';
     else { S.settings.vizSizePrev = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md'; S.settings.vizSize = 'full'; S.settings.viz = true; }
@@ -3138,7 +3378,19 @@ const acts = {
   },
   matchrest: el => startMatching(ctxList(el.dataset.id)),
   newpl: () => plModal(), editpl: el => plModal(el.dataset.id),
-  delpl: el => { const p = S.playlists.find(x => x.id === el.dataset.id); if (p && confirm(`Delete “${p.name}”? The songs stay on Spotify and YouTube.`)) { delCover(p.cover && p.cover.url); S.playlists = S.playlists.filter(x => x !== p); save(); closeModal(true); drawSide(); nav('library'); } },
+  delpl: el => {
+    const p = S.playlists.find(x => x.id === el.dataset.id); if (!p) return;
+    const at = S.playlists.indexOf(p);
+    S.playlists = S.playlists.filter(x => x !== p); save(); closeModal(true); drawSide(); nav('library');
+    undoable(`Deleted “${p.name}”`, () => {
+      S.playlists.splice(Math.min(at, S.playlists.length), 0, p);
+      save(); drawSide(); refreshView();
+    }, () => delCover(p.cover && p.cover.url));
+  },
+  'toast-undo': () => { runUndo(); },
+  plmore: playlistMore,
+  resume: () => { if (R.cur && audio.paused) togglePlay(); },
+  'sleep-menu': el => { const b = el.getBoundingClientRect(); sleepMenu(b.left, b.top - 14 - 6 * 44); },
   'pick-cover': pickFile,
   'rm-cover': () => { grabName(); const { url, ...rest } = M.cover; M.cover = rest; M.tab = 'logo'; drawPlModal(); },
   'pm-tab': el => { grabName(); M.tab = el.dataset.k; drawPlModal(); },
@@ -3356,8 +3608,10 @@ const acts = {
   },
   'save-dir': async () => { try { await api('/api/config', { method: 'PUT', json: { downloadDir: $('#dl-dir').value } }); await refreshHealth(); toast('Folder saved'); } catch (e) { toast(e.message); } },
 };
+document.addEventListener('pointerdown', () => { delete document.documentElement.dataset.kbd; }, true);
 document.addEventListener('click', e => {
   const t = e.target;
+  if (t.closest('.qgrip') || Date.now() - (R.dragAt || 0) < 400) { e.preventDefault(); return; }
   if (t.closest('.row') && Date.now() - (R.longPressAt || 0) < 650) { e.preventDefault(); return; }
   if (!t.closest('#menu') && !t.closest('[data-act=menu]')) closeMenu();
   const mi = t.closest('[data-mi]'); if (mi) { const f = R.menu[+mi.dataset.mi][2]; closeMenu(); f(); return; }
@@ -3402,6 +3656,7 @@ document.addEventListener('change', e => {
   if (k === 'sleep') {
     const m = +el.value;
     if (el.value === 'active') return;
+    R.sleepAfterSong = false;
     S.settings.sleepUntil = m ? Date.now() + m * 60000 : 0;
     save(); syncSleep();
     if (m) toast(`Sleep timer: pausing in ${sleepLabel(m * 60000)}`);
@@ -3414,6 +3669,7 @@ document.addEventListener('change', e => {
 document.addEventListener('input', e => {
   if (e.target.id === 'accent-pick') { S.settings.accent = e.target.value; applyTheme(); save(); }
   if (e.target.id === 'set-find') filterSettings();
+  if (e.target.id === 'pl-find') { R.plFilter = e.target.value.trim().toLowerCase(); repaintPlaylist(); }
   if (e.target.id === 'sp-list') updateListCount();
   if (e.target.id === 'imp-name' && IMPORT) IMPORT.name = e.target.value;
 });
@@ -3465,7 +3721,7 @@ document.addEventListener('touchstart', e => {
   if (!matchMedia('(pointer: coarse)').matches) return;
   const player = e.target.closest('#player'), np = e.target.closest('#np'), queue = e.target.closest('#queue');
   if (!player && !np && !queue) return;
-  if (e.target.closest('button,[data-seek],[data-vol],input')) return;
+  if (e.target.closest('button,[data-seek],[data-vol],input,.qgrip')) return;
   const p = e.touches[0];
   touchStart = { x: p.clientX, y: p.clientY, player, np, queue };
 }, { passive: true });
@@ -3478,6 +3734,98 @@ document.addEventListener('touchend', e => {
   if (st.queue && dy > 70 && Math.abs(dy) > Math.abs(dx) * 1.2) { haptic(); $('#queue').classList.remove('open'); }
 }, { passive: true });
 
+/* Queue drag-to-reorder. Pointer events work for mouse and touch alike. */
+let qDrag = null;
+document.addEventListener('pointerdown', e => {
+  const grip = e.target.closest('.qgrip'); if (!grip) return;
+  const item = grip.closest('.qi'); if (!item) return;
+  e.preventDefault();
+  qDrag = { from: +item.dataset.qi, to: +item.dataset.qi, item };
+  item.classList.add('drag');
+  try { grip.setPointerCapture(e.pointerId); } catch {}
+});
+document.addEventListener('pointermove', e => {
+  if (!qDrag) return;
+  const list = $('#q-list'); if (!list) return;
+  const items = $$('.qi', list);
+  for (const el of items) {
+    const r = el.getBoundingClientRect();
+    if (e.clientY >= r.top && e.clientY <= r.bottom) { qDrag.to = +el.dataset.qi; break; }
+  }
+  const box = list.getBoundingClientRect();
+  if (e.clientY < box.top + 24) list.scrollTop -= 12;
+  else if (e.clientY > box.bottom - 24) list.scrollTop += 12;
+  items.forEach(el => {
+    const i = +el.dataset.qi;
+    el.classList.toggle('drop-above', qDrag.to !== qDrag.from && i === qDrag.to && qDrag.to < qDrag.from);
+    el.classList.toggle('drop-below', qDrag.to !== qDrag.from && i === qDrag.to && qDrag.to > qDrag.from);
+  });
+});
+const endQDrag = () => {
+  if (!qDrag) return;
+  const { from, to } = qDrag; qDrag = null; R.dragAt = Date.now();
+  if (from !== to) { haptic(10); moveQueue(from, to); } else renderQueue();
+};
+document.addEventListener('pointerup', endQDrag);
+document.addEventListener('pointercancel', endQDrag);
+
+/* Touch: swipe a song right for Play next, left to like it. */
+let swipe = null;
+document.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch' || S.settings.swipeRows === false) return;
+  const row = e.target.closest('.row');
+  if (!row || e.target.closest('button,a,input')) return;
+  swipe = { x: e.clientX, y: e.clientY, row, dx: 0, live: false };
+}, { passive: true });
+document.addEventListener('pointermove', e => {
+  if (!swipe) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  if (!swipe.live) {
+    if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
+    if (Math.abs(dx) < 18 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    swipe.live = true; swipe.row.classList.add('swiping'); cancelHold();
+  }
+  swipe.dx = dx;
+  const lim = Math.max(-120, Math.min(120, dx));
+  swipe.row.style.transform = `translateX(${lim * 0.55}px)`;
+  swipe.row.dataset.swipe = Math.abs(dx) > 84 ? (dx > 0 ? 'queue' : 'like') : '';
+}, { passive: true });
+const endSwipe = () => {
+  if (!swipe) return;
+  const { row, dx, live } = swipe; swipe = null;
+  if (!live) return;
+  R.longPressAt = Date.now();
+  row.classList.remove('swiping'); row.style.transform = ''; delete row.dataset.swipe;
+  if (Math.abs(dx) <= 84) return;
+  const t = ctxList(row.dataset.ctx)[+row.dataset.i]; if (!t) return;
+  haptic(14);
+  if (dx > 0) {
+    if (!R.cur) return play([t], 0, row.dataset.ctx);
+    R.queue.splice(R.idx + 1, 0, { ...t, auto: false }); refreshQueue(); renderQueue(); saveSession(true);
+    toast(`Playing next: ${t.title}`);
+  } else { toggleLike(t); toast(liked(t) ? 'Added to Liked Songs' : 'Removed from Liked Songs'); }
+};
+document.addEventListener('pointerup', endSwipe, { passive: true });
+document.addEventListener('pointercancel', endSwipe, { passive: true });
+
+/* Full-screen player: double-tap the artwork — left third back 10s, right third
+   forward 10s, middle toggles play. */
+let artTap = { t: 0, x: 0 };
+$('#np-art').addEventListener('pointerup', e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const now = Date.now(), box = e.currentTarget.getBoundingClientRect();
+  if (now - artTap.t > 320 || Math.abs(e.clientX - artTap.x) > 60) { artTap = { t: now, x: e.clientX }; return; }
+  artTap = { t: 0, x: 0 };
+  const f = (e.clientX - box.left) / Math.max(1, box.width);
+  if (!R.cur) return;
+  if (f < 0.34 || f > 0.66) {
+    const d = (isFinite(audio.duration) && audio.duration) || R.cur.duration || 0;
+    const by = f < 0.5 ? -10 : 10;
+    audio.currentTime = Math.max(0, Math.min(d || Infinity, audio.currentTime + by));
+    haptic(8); toast(by < 0 ? '−10 seconds' : '+10 seconds');
+  } else { togglePlay(); haptic(8); }
+});
+
 let qT;
 const goSearch = v => {
   v = v.trim();
@@ -3488,6 +3836,7 @@ const goSearch = v => {
 $('#q').addEventListener('input', e => { clearTimeout(qT); updateSearchClear(); const v = e.target.value; qT = setTimeout(() => goSearch(v), isSpUrl(v) ? 50 : 550); });
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(qT); goSearch(e.target.value); } });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Tab') document.documentElement.dataset.kbd = '1';
   const typing = /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
   const modalOpen = $('#modal').classList.contains('open');
   const menuOpen = $('#menu').classList.contains('open');
@@ -3501,6 +3850,9 @@ document.addEventListener('keydown', e => {
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault(); const q = $('#q'); q.focus(); q.select(); return;
+  }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !typing && R.undo) {
+    e.preventDefault(); runUndo(); return;
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   if (modalOpen) return;
@@ -3540,16 +3892,18 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'KeyS') acts.shuffle();
   else if (e.code === 'KeyR') acts.repeat();
   else if (e.code === 'KeyF') toggleNP();
+  else if (e.code === 'KeyV') vizGallery();
+  else if (e.code === 'KeyT') sleepMenu(innerWidth / 2 - 100, innerHeight / 2 - 120);
   else if (e.code === 'KeyQ') { renderQueue(); $('#queue').classList.toggle('open'); }
-  else if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
   else if (e.key === '?') { e.preventDefault(); showShortcuts(); }
+  else if (e.key === '/' || e.code === 'Slash') { e.preventDefault(); $('#q').focus(); $('#q').select(); }
 });
 addEventListener('hashchange', route);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); }
   else if (R.playing) startListening();
 });
-addEventListener('pagehide', () => { flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); });
+addEventListener('pagehide', () => { flushUndo(); flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); });
 
 /* ═════════ boot ═════════ */
 (async function boot() {
@@ -3565,6 +3919,8 @@ addEventListener('pagehide', () => { flushListening(); api('/api/state', { metho
   if (!Array.isArray(S.settings.blockedArtists)) S.settings.blockedArtists = [];
   if (!SORT_KEYS.some(([k]) => k === S.settings.plSort)) S.settings.plSort = 'added';
   if (!['list', 'grid'].includes(S.settings.plView)) S.settings.plView = 'list';
+  if (!WLViz.has(S.settings.vizStyle)) S.settings.vizStyle = 'matrix';
+  if (typeof S.settings.swipeRows !== 'boolean') S.settings.swipeRows = true;
   if (S.settings.theme === 'nothing') S.settings.theme = 'dark';
   if (!THEME_GROUPS.some(g => g.items.some(([k]) => k === S.settings.theme))) S.settings.theme = 'dark';
   if (!STYLES.includes(S.settings.style)) S.settings.style = 'nothing';
@@ -3572,4 +3928,6 @@ addEventListener('pagehide', () => { flushListening(); api('/api/state', { metho
   if (!NATIVE && !/Electron/.test(navigator.userAgent) && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['127.0.0.1', 'localhost'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
   applyTheme(); applyMotion(); applyReading(); applyVol(); drawSide(); renderQueue(); updateTransport(); syncSleep(); vizSync(); updateSearchClear(); syncNativePrefs(); watchAudioOutputs();
   await refreshHealth(); await route(); restoreSession(); localLoad(); syncLoad(); syncPoll();
+  booted = true;
+  launchQueue.splice(0).forEach(([c, a]) => window.wlLaunch(c, a));
 })();

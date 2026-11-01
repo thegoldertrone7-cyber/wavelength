@@ -40,7 +40,7 @@ public class VizView extends View {
     }
 
     void setStyle(String value) {
-        style = value == null ? "matrix" : value;
+        style = fold(value);
         invalidate();
     }
 
@@ -168,5 +168,23 @@ public class VizView extends View {
         }
 
         if (playing) postInvalidateOnAnimation();
+    }
+
+    /* The web app has twenty visualizer styles. The lock screen draws the
+       closest of its four classic looks for the rest. */
+    static String fold(String s) {
+        if (s == null) return "matrix";
+        switch (s) {
+            case "matrix": case "bars": case "wave": case "radial":
+                return s;
+            case "mirror": case "peaks": case "horizon": case "segments":
+                return "bars";
+            case "ribbon": case "line": case "aurora": case "scope": case "ridges":
+                return "wave";
+            case "rings": case "orbit": case "sunburst": case "pulse": case "spiral": case "fireflies":
+                return "radial";
+            default:
+                return "matrix";
+        }
     }
 }
