@@ -1724,3 +1724,60 @@ body.playing .pp{animation:none;box-shadow:0 0 0 6px rgba(var(--accent-rgb),.14)
 .viz-now{display:flex;align-items:center;gap:10px}
 @media (max-width:520px){.viz-gal{grid-template-columns:repeat(2,1fr);gap:9px}.viz-card .vc-h{display:none}}
 [data-motion=reduced] .viz-card canvas{opacity:.9}
+
+/* ══════════════════════════════════════════════
+   MOTION v3  (see public/js/motion.js)
+══════════════════════════════════════════════ */
+@keyframes vtOut{to{opacity:0}}
+@keyframes vtIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* page changes: the page group crossfades, the rest of the window stays put */
+html.vt-page #view{view-transition-name:page}
+html.vt-page::view-transition-old(root),html.vt-page::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-group(page){animation:none}
+::view-transition-old(page){animation:vtOut .12s linear both}
+::view-transition-new(page){animation:vtIn .36s var(--soft) both}
+
+/* a cover on both pages is one object that travels */
+::view-transition-group(cover),::view-transition-group(art){animation-duration:.6s;animation-timing-function:var(--spring);overflow:clip}
+::view-transition-old(cover),::view-transition-new(cover),::view-transition-old(art),::view-transition-new(art){height:100%;width:100%;object-fit:cover}
+
+/* the full-screen player: the window crossfades while the artwork grows */
+html.vt-player::view-transition-group(root){animation-duration:.45s;animation-timing-function:var(--soft)}
+html.vt-player .np{transition:none!important}
+
+/* one highlight that slides, instead of each item lighting up on its own */
+.nav,.mnav,.sort-chips{position:relative}
+.glider{position:absolute;left:0;top:0;border-radius:999px;background:var(--invert);pointer-events:none;z-index:0;opacity:0;will-change:transform,width,height;transition:transform .55s var(--spring),width .55s var(--spring),height .55s var(--spring),opacity .25s linear}
+.mnav .glider{background:var(--card2)}
+.nav.gl a,.mnav.gl a,.sort-chips.gl .chip{position:relative;z-index:1}
+.nav.gl a.on,.sort-chips.gl .chip.on{background:transparent}
+.mnav.gl a.on{background:transparent}
+
+/* lists that glide never replay their entrance */
+[data-nr] .rise{animation:none}
+.flip-ghost{z-index:0}
+
+/* artwork fades in when it has loaded, and the previous one fades out underneath */
+.art img,.cover img{opacity:0;animation:none;transition:opacity .45s var(--soft)}
+.art img.ld,.cover img.ld{opacity:1}
+#p-art,#np-art{position:relative}
+.art-out{position:absolute!important;inset:0;pointer-events:none;animation:artOut .5s var(--soft) forwards!important}
+@keyframes artOut{to{opacity:0}}
+
+/* the seek bar is driven every frame, so it must not chase itself */
+.js-fill{transition-property:background,background-color!important}
+
+/* header artwork eases away as the page scrolls */
+.ph .cover{transform:translateY(calc(var(--sy,0)*.14px)) scale(calc(1 - var(--sy,0)/2600));opacity:calc(1 - var(--sy,0)/1100);will-change:transform}
+@media (prefers-reduced-motion:reduce){.ph .cover{transform:none;opacity:1}}
+[data-motion=reduced] .ph .cover{transform:none;opacity:1}
+
+/* the label darkens as the highlight arrives under it, not before */
+.nav.gl a,.mnav.gl a,.sort-chips.gl .chip{transition:color .18s linear,background .3s,transform .5s var(--spring)}
+.nav.gl a.on,.mnav.gl a.on,.sort-chips.gl .chip.on{transition:color .22s linear .2s,background .3s,transform .5s var(--spring)}
+
+/* The glow is already a soft radial gradient, so the 100px blur on top added
+   cost without changing the look. Promoting the layer lets the drift run on
+   the compositor instead of repainting every frame. */
+.ambient i,[data-style=glass] .ambient i{filter:none;will-change:transform;background:radial-gradient(circle,rgb(var(--accent-rgb)) 0%,rgba(var(--accent-rgb),.55) 22%,rgba(var(--accent-rgb),.18) 45%,transparent 68%)}

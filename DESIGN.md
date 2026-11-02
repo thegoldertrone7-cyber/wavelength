@@ -129,6 +129,21 @@ Rules:
   not pulse. Only functional motion runs continuously: the equaliser on the playing row,
   spinners, skeleton shimmer, the visualiser, and a very slow ambient drift in the background.
 - **Small accents settle.** A liked heart swells to 1.14 and returns; the active nav dot slides in.
+- **Things that exist on both sides of a change are the same thing, and travel.** Clicking a
+  playlist tile (or its sidebar entry) makes that cover physically grow into the page header; going
+  back shrinks it into the tile it came from. The mini player's artwork grows into the full-screen
+  player and back. This uses View Transitions (`public/js/motion.js`).
+- **Lists glide.** Sorting, filtering, shuffling or reordering moves each row to its new place
+  (FLIP). New rows arrive, removed rows fade where they stood, and rows never replay their entrance
+  during these changes.
+- **One highlight slides.** In the default look, the selected sidebar item and sort chip are a single
+  pill that glides to the new item, and the label darkens as the pill arrives under it.
+- **The seek bar is driven every frame,** not four times a second, so it never steps.
+- **Artwork fades in** once it has loaded, and a changing track cross-fades from the previous artwork.
+- **Header artwork eases away** (a gentle drift, shrink and fade) as a playlist page scrolls.
+- **Motion only where it carries meaning.** Plain page changes use the cheap CSS entrance; the heavier
+  View Transition is only used when a cover really travels. If a device is slow to start two
+  transitions in a row they are turned off for that device and the CSS entrances take over.
 - **Undo is motion's partner.** Destructive actions apply immediately and offer a seven second
   Undo toast, so nothing needs a confirmation dialog.
 

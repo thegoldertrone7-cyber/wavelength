@@ -454,7 +454,7 @@ public class PlaybackService extends Service {
             .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
             .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
             .putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
-        if (!artUrl.isEmpty()) {
+        if (!artUrl.isEmpty() && !artUrl.startsWith("data:")) {
             b.putString(MediaMetadata.METADATA_KEY_ART_URI, artUrl);
             b.putString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI, artUrl);
         }
@@ -472,6 +472,22 @@ public class PlaybackService extends Service {
         artPool.execute(() -> {
             HttpURLConnection conn = null;
             try {
+                if (wanted.startsWith("data:")) {
+                    /* A thumbnail the person chose is stored inside the library as a
+                       data URI, so there is nothing to download. */
+                    int comma = wanted.indexOf(',');
+                    if (comma < 0) return;
+                    byte[] raw = android.util.Base64.decode(wanted.substring(comma + 1), android.util.Base64.DEFAULT);
+                    Bitmap picked = BitmapFactory.decodeByteArray(raw, 0, raw.length);
+                    if (picked == null || !wanted.equals(artUrl)) return;
+                    art = scaleArt(picked, 512);
+                    saveArt(art);
+                    artVersion++;
+                    applyMetadata();
+                    updateNotification();
+                    publishWidget();
+                    return;
+                }
                 conn = (HttpURLConnection) new URL(wanted).openConnection();
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(8000);
