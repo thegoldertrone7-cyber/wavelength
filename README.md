@@ -21,16 +21,17 @@ checksums are in `SHA256SUMS.txt`.
   or `Wavelength-2.4.1-linux-x86_64.flatpak`
 - **Android**: `Wavelength-2.4.1-android.apk`
 
-**Overhaul — 2.5.0.** A separate release built from the `Overhaul` branch, with the same four
-platforms on the [Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.0-overhaul).
-It adds twenty visualizer styles with a live gallery, undo and filtering across playlists and the
-queue, a sleep timer, touch shortcuts and reworked Android widgets and shortcuts.
+**Overhaul — 2.5.1.** A separate release built from the `Overhaul` branch, with the same four
+platforms on the [Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.1-overhaul).
+It adds motion v3 (covers that travel between pages, lists that glide, artwork that fades in),
+playback speed, editable song details, twenty visualizer styles with a live gallery, undo and
+filtering across playlists and the queue, a sleep timer and reworked Android widgets and shortcuts.
 
-- **macOS** (Intel + Apple Silicon): `Wavelength-2.5.0-macos-universal.dmg`
-- **Windows**: `Wavelength-2.5.0-windows-setup.exe`
-- **Linux**: `Wavelength-2.5.0-linux.AppImage`, `Wavelength-2.5.0-linux-arm64.AppImage`
-  or `Wavelength-2.5.0-linux-x86_64.flatpak`
-- **Android**: `Wavelength-2.5.0-android.apk`
+- **macOS** (Intel + Apple Silicon): `Wavelength-2.5.1-macos-universal.dmg`
+- **Windows**: `Wavelength-2.5.1-windows-setup.exe`
+- **Linux**: `Wavelength-2.5.1-linux.AppImage`, `Wavelength-2.5.1-linux-arm64.AppImage`
+  or `Wavelength-2.5.1-linux-x86_64.flatpak`
+- **Android**: `Wavelength-2.5.1-android.apk`
 
 The macOS and Windows builds are unsigned, so the first launch shows the usual warning. Installation
 details, sync steps and limits are in [DOWNLOADS.md](DOWNLOADS.md).
@@ -50,7 +51,7 @@ Build an installable app (run it on the OS you are building for):
     bash scripts/build-flatpak.sh   # -> dist/Wavelength-*-x86_64.flatpak (Linux)
 
 The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`.
-Each release page lists the installation files included; v2.4.1 and the separate Overhaul 2.5.0
+Each release page lists the installation files included; v2.4.1 and the separate Overhaul 2.5.1
 release each ship macOS, Windows, Linux and Android together.
 
 The app is unsigned. First launch on macOS: right-click the app -> Open, or run

@@ -10,16 +10,17 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.1** stable · **2.5.0** Overhaul | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.1** stable · **2.5.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Android APK | **v2.4.1** stable · **2.5.1** Overhaul | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** stable · **2.5.1** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.1** stable · **Overhaul** branch | Runs through the bundled Node server |
 
 `v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
 arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
 Android **Smart volume** and the full-screen volume meter. A second, separate release —
-**Overhaul 2.5.0**, built from the `Overhaul` branch — ships the same platforms with the visualizer
-gallery, queue and playlist tools, sleep timer and Android widget work described in §11.1. This
-document describes shipped behaviour first and future direction second.
+**Overhaul 2.5.1**, built from the `Overhaul` branch — ships the same platforms with motion v3,
+playback speed and song editing, plus the visualizer gallery, queue and playlist tools, sleep timer
+and Android widget work described in §11.1. This document describes shipped behaviour first and
+future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
 ---
@@ -1069,6 +1070,19 @@ cloud product.
 - Taller Android widgets with progress and a like action, launcher shortcuts, notification like
   actions, revised back handling and calmer motion.
 
+**Shipped in Overhaul 2.5.1**
+
+- Motion v3: page changes crossfade while covers travel between pages, the mini player's artwork
+  grows into the full-screen player, lists glide when sorted, filtered, shuffled or reordered, the
+  nav highlight slides as one pill, the seek bar updates every frame, and artwork fades in.
+  Devices that start transitions slowly fall back to the plain crossfade; reduced motion is
+  respected.
+- Playback speed at 0.75×, 1×, 1.25×, 1.5×, 1.75× and 2× from the player or with `[` and `]`.
+- Editable song details: title, artist and artwork (uploaded image, original or none), stored once
+  and applied everywhere the song appears, with undo and restore.
+- Android decodes chosen data-URI artwork for the lock screen, notification and widget instead of
+  trying to download it.
+
 ### 11.2 Not in this build
 
 | Item | Status | Notes |
@@ -1113,7 +1127,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The stable installers are all v2.4.1; Overhaul is a separate 2.5.0 release.** The desktop
+8. **The stable installers are all v2.4.1; Overhaul is a separate 2.5.1 release.** The desktop
    builds are unsigned, so macOS and Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1144,7 +1158,10 @@ These are repeated in the interface and should remain true in every future relea
   sleep timer, touch shortcuts, calmer motion, and taller Android widgets with progress, a like
   action and launcher shortcuts. Ships on macOS, Windows, Linux (AppImage for x64 and arm64, and
   Flatpak) and Android.
-- The latest stable release remains **v2.4.1**; Overhaul 2.5.0 is published beside it and is not
+- **Overhaul 2.5.1** — motion v3 (travelling covers, gliding lists and highlights, artwork fades),
+  playback speed, editable song title/artist/artwork with undo, and Android chosen-artwork
+  decoding. Includes everything from 2.5.0 and ships on the same four platforms.
+- The latest stable release remains **v2.4.1**; Overhaul 2.5.1 is published beside it and is not
   marked latest.
 
 ### 12.2 Phase 1 — Stabilise the instrument
