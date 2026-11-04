@@ -646,6 +646,13 @@ function pickAudioFormat(formats, quality = 'best') {
   const bySaver = list => list.slice().sort((a, b) => (+a.bitrate || 0) - (+b.bitrate || 0));
   const m4a = formats.filter(f => /audio\/mp4/i.test(f.mimeType));
   const webm = formats.filter(f => /audio\/webm/i.test(f.mimeType));
+  if (q === 'poor') {
+    // Weak connection: the smallest stream that still plays everywhere (Opus ~50 kbps, never HE-AAC).
+    return bySaver(webm)[0]
+      || m4a.find(f => f.itag === 140)
+      || bySaver(m4a.filter(f => f.itag !== 139))[0]
+      || bySaver(formats)[0];
+  }
   if (q === 'saver') {
     // Prefer Opus/WebM for data saver: lower bitrate and no HE-AAC trouble.
     return bySaver(webm.filter(f => (+f.bitrate || 0) <= 128000))[0]
@@ -657,11 +664,13 @@ function pickAudioFormat(formats, quality = 'best') {
   }
   return byBest(webm)[0] || byBest(formats)[0] || byBest(m4a)[0];
 }
-const normQuality = value => value === 'saver' ? 'saver' : 'best';
+const normQuality = value => value === 'saver' || value === 'poor' ? value : 'best';
 const resolutionKey = (id, quality) => id + ':' + normQuality(quality);
-const audioFormat = quality => normQuality(quality) === 'saver'
-  ? 'ba[ext=m4a][abr<=128]/ba[abr<=128]/ba[ext=m4a]/ba'
-  : AUDIO_FMT;
+const audioFormat = quality => normQuality(quality) === 'poor'
+  ? 'ba[abr<=64]/wa[ext=webm]/wa'
+  : normQuality(quality) === 'saver'
+    ? 'ba[ext=m4a][abr<=128]/ba[abr<=128]/ba[ext=m4a]/ba'
+    : AUDIO_FMT;
 
 const isAudioUrl = value => {
   try {
@@ -766,7 +775,9 @@ async function androidResolution(id, quality = 'best') {
   const m4a = formats.filter(f => /audio\/mp4/i.test(f.mimeType));
   const byBest = list => list.slice().sort((a, b) => (+b.bitrate || 0) - (+a.bitrate || 0));
   const bySaver = list => list.slice().sort((a, b) => (+a.bitrate || 0) - (+b.bitrate || 0));
-  const fmt = q === 'saver'
+  const fmt = q === 'poor'
+    ? (bySaver(formats.filter(f => /webm/i.test(f.mimeType)))[0] || formats.find(f => f.itag === 140) || bySaver(m4a.filter(f => f.itag !== 139))[0] || bySaver(formats)[0])
+    : q === 'saver'
     ? (formats.find(f => f.itag === 140)
       || byBest(m4a.filter(f => (+f.bitrate || 0) <= 128000))[0]
       || bySaver(m4a)[0]
@@ -992,11 +1003,35 @@ async function proxyAudio(req, res, id, quality = 'best') {
     res.writeHead(up.status, headers);
     if (req.method === 'HEAD') { try { await up.body?.cancel(); } catch {} return true; }
 
-    const body = up.body ? Readable.fromWeb(up.body) : Readable.from([]);
-    const cleanup = () => { ac.abort(); body.destroy(); };
+    /* Weak networks drop connections mid-chunk. Instead of ending the response (which makes the player
+       stall and reload), resume the same range from the byte where it broke, a few times. */
+    const cr = up.headers.get('content-range') || '';
+    const startByte = up.status === 206 ? (+(/bytes (\d+)-/.exec(cr) || [])[1] || 0) : 0;
+    const endByte = up.status === 206 ? +(/bytes \d+-(\d+)/.exec(cr) || [])[1] : (+up.headers.get('content-length') || 0) - 1;
+    let cur = up.body ? Readable.fromWeb(up.body) : Readable.from([]), got = 0, tries = 0;
+    const cleanup = () => { ac.abort(); try { cur.destroy(); } catch {} };
     res.on('close', cleanup);
-    try { await pipeline(body, res); }
-    catch (e) { if (!res.destroyed) console.warn(`[stream] ${id} relay ended: ${e.message}`); }
+    try {
+      for (;;) {
+        try {
+          for await (const chunk of cur) {
+            if (res.destroyed) break;
+            got += chunk.length;
+            if (!res.write(chunk)) await new Promise(ok => { res.once('drain', ok); res.once('close', ok); });
+          }
+          break;
+        } catch (e) {
+          if (res.destroyed || !(endByte > 0) || startByte + got > endByte || tries >= 4) throw e;
+          tries++; await sleep(400 * tries);
+          const h = upstreamHeaders(req, r); h.Range = `bytes=${startByte + got}-${endByte}`;
+          const again = await fetch(r.url, { headers: h, redirect: 'follow', signal: ac.signal });
+          if (again.status !== 206 || !again.body) throw e;
+          console.warn(`[stream] ${id} connection dropped, resumed at byte ${startByte + got}`);
+          cur = Readable.fromWeb(again.body);
+        }
+      }
+      if (!res.destroyed) res.end();
+    } catch (e) { if (!res.destroyed) { console.warn(`[stream] ${id} relay ended: ${e.message}`); res.destroy(); } }
     finally { res.off('close', cleanup); }
     return true;
   }
@@ -1722,6 +1757,7 @@ function mergeLibraries(left, rights, selection = null) {
         addedPlaylists.add(key);
         out.playlists.push(have);
       } else {
+        if ((+p.coverAt || 0) > (+have.coverAt || 0) && p.cover) { have.cover = p.cover; have.coverAt = p.coverAt; }
         for (const f of ['name', 'cover', 'description', 'createdAt']) {
           if ((have[f] == null || have[f] === '') && p[f] != null) have[f] = p[f];
         }
@@ -1803,9 +1839,27 @@ const cleanSyncLibrary = v => {
   if (!v || typeof v !== 'object') throw httpErr(400, 'That device did not send a library');
   return { playlists: syncList(v.playlists, 2000), liked: syncList(v.liked, 50000), history: syncList(v.history, 50000), listening: cleanListening(v.listening) };
 };
+/* Custom playlist pictures are files on this computer, so they travel inside the library as small data URLs
+   and are turned back into files on arrival. A phone keeps them as data URLs. */
+const coverToData = url => {
+  try {
+    if (!/^\/covers\/[\w.-]+$/.test(url || '')) return url;
+    const b = fs.readFileSync(path.join(COVERS, path.basename(url))), ext = sniff(b);
+    return ext && b.length <= 400000 ? `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,` + b.toString('base64') : url;
+  } catch { return url; }
+};
+const coverFromData = url => {
+  const m = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=]+)$/.exec(url || '');
+  if (!m || url.length > 560000) return url;
+  const b = Buffer.from(m[2], 'base64'), ext = sniff(b); if (!ext) return url;
+  const name = 'sync-' + crypto.createHash('sha1').update(b).digest('hex').slice(0, 24) + '.' + ext, f = path.join(COVERS, name);
+  try { if (!fs.existsSync(f)) fs.writeFileSync(f, b); } catch { return url; }
+  return '/covers/' + name;
+};
+const mapCovers = (pls, fn) => pls.map(p => p && p.cover && typeof p.cover.url === 'string' ? { ...p, cover: { ...p.cover, url: fn(p.cover.url) } } : p);
 const readSyncLibrary = () => {
   const st = readJSON('state.json', {}) || {};
-  return { playlists: syncList(st.playlists, 2000), liked: syncList(st.liked, 50000), history: syncList(st.history, 50000), listening: cleanListening(st.listening) };
+  return { playlists: mapCovers(syncList(st.playlists, 2000), coverToData), liked: syncList(st.liked, 50000), history: syncList(st.history, 50000), listening: cleanListening(st.listening) };
 };
 const syncCounts = lib => ({
   playlists: lib.playlists.length,
@@ -1817,7 +1871,7 @@ const syncCounts = lib => ({
 const stateStamp = () => { try { return fs.statSync(path.join(DATA, 'state.json')).mtimeMs; } catch { return 0; } };
 const applySyncLibrary = lib => {
   const state = readJSON('state.json', {}) || {};
-  state.playlists = lib.playlists;
+  state.playlists = mapCovers(lib.playlists, coverFromData);
   state.liked = lib.liked;
   state.history = lib.history;
   state.listening = mergeListening(cleanListening(state.listening), lib.listening || { devices: {} });
@@ -1970,7 +2024,7 @@ function syncNowHandle(b) {
 /* ── Sync folder: each device writes its own file into a shared folder (Dropbox, Syncthing, iCloud...)
    and merges the others. Works while the other devices are switched off. ── */
 let folderCfg = readJSON('syncfolder.json', { dir: '' }), folderErr = '', folderRev = 0, folderT = 0, folderSeen = {};
-const folderMe = () => 'wavelength-library-' + os.hostname().replace(/[^\w.-]/g, '_').slice(0, 40) + '.json';
+const folderMe = () => 'wavelength-library-' + (process.env.WAVELENGTH_DEVICE || os.hostname()).replace(/[^\w.-]/g, '_').slice(0, 40) + '.json';
 function folderFiles() {
   if (!folderCfg.dir) return [];
   try { return fs.readdirSync(folderCfg.dir).filter(f => /^wavelength-library-.+\.json$/.test(f)).map(f => ({ f, m: fs.statSync(path.join(folderCfg.dir, f)).mtimeMs })); } catch { return []; }
@@ -2380,6 +2434,10 @@ async function api(req,res,u,p){
     if(m==='PUT'){writeJSON('state.json',await parse(25e6));folderWrite();return json(res,{ok:true});}
   }
 
+  if(p==='/api/update/status'&&m==='GET') return json(res,require('./updater').status());
+  if(p==='/api/update/check'&&m==='POST') return json(res,await require('./updater').check());
+  if(p==='/api/update/install'&&m==='POST'){try{return json(res,await require('./updater').install());}catch(e){throw httpErr(400,e.message);}}
+  if(p==='/api/update/restart'&&m==='POST'){if(typeof global.WL_RELAUNCH==='function'){json(res,{ok:true});setTimeout(()=>global.WL_RELAUNCH(),300);return;}return json(res,{ok:false,manual:true});}
   if(m==='POST'&&p==='/api/discord'){try{return json(res,await require('./discord-rpc').update(await parse(1e5)));}catch(e){return json(res,{connected:false});}}
   if(m==='POST'&&p==='/api/sync/remote'){
     const b=await parse(2e5);

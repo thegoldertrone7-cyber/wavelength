@@ -64,7 +64,19 @@ app.whenReady().then(async () => {
   // desktop app. Wavelength still requires the X-Wavelength header for API
   // writes, and Settings → Devices shows the exact LAN address to enter.
   process.env.HOST = process.env.HOST || '0.0.0.0';
-  const srv = require('../server.js');
+  process.env.WAVELENGTH_UPDATES = path.join(app.getPath('userData'), 'updates');
+  process.env.WAVELENGTH_SHELL = app.getVersion();
+  global.WL_RELAUNCH = () => { app.relaunch(); app.exit(0); };
+  // Run the newest verified update if there is one; otherwise (or if it fails to load) the bundled copy.
+  let root = path.join(__dirname, '..');
+  try { root = require('../updater.js').activeRoot(); } catch (e) { console.warn('[update] ' + e.message); }
+  let srv;
+  try { srv = require(path.join(root, 'server.js')); await srv.ready; }
+  catch (e) {
+    console.warn('[update] update failed to start, using the bundled version: ' + e.message);
+    for (const k of Object.keys(require.cache)) if (k.startsWith(root + path.sep) && root !== path.join(__dirname, '..')) delete require.cache[k];
+    srv = require('../server.js');
+  }
   await srv.ready;
 
   // Set dock icon (macOS)
@@ -109,6 +121,7 @@ app.whenReady().then(async () => {
   const url = `http://127.0.0.1:${srv.port}/`;
   console.log(`[Wavelength] Loading → ${url}`);
   win.loadURL(url);
+  win.webContents.once('did-finish-load', () => { setTimeout(() => { try { require('../updater.js').confirmBoot(); } catch {} }, 4000); });
 
   // Open external links in browser, not in the app window
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });

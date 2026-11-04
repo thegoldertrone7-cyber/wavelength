@@ -163,7 +163,7 @@ function rememberSearch(q) {
 }
 
 /* ═════════ state ═════════ */
-const DEF = { playlists: [], liked: [], history: [], overrides: {}, listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, skipIntro: 'off', skipOutro: 'off', skipBreaks: 'off', skipSure: 'balanced', skipCrowd: true, skipSilence: true, skipMemory: {}, scrollbar: 'pill', navPos: 'left', dockPos: 'bottom', contentWidth: 'full', dotBg: false, dotOpacity: 22, dotScale: 22, customCss: '', syncOnOpen: false, syncDaily: false, syncControl: false, syncLast: 0, lockLayout: 'art', lockTheme: 'accent', lockControls: true, lockHide: 9, lockHint: true, pinned: [], perf: 'auto', realViz: false, off: [], setupDone: false, vizHidden: [], discord: false, discordId: '', lyrics: true, headphonesPause: true, plSort: 'added', plView: 'list', swipeRows: true, speed: 1 } };
+const DEF = { playlists: [], liked: [], history: [], overrides: {}, listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, skipIntro: 'off', skipOutro: 'off', skipBreaks: 'off', skipSure: 'balanced', skipCrowd: true, skipSilence: true, skipMemory: {}, scrollbar: 'pill', navPos: 'left', dockPos: 'bottom', contentWidth: 'full', dotBg: false, dotOpacity: 22, dotScale: 22, customCss: '', netMode: 'auto', autoUpdate: true, updCheckedAt: 0, shuffleSmart: true, stayInList: true, syncOnOpen: false, syncDaily: false, syncControl: false, syncLast: 0, lockLayout: 'art', lockTheme: 'accent', lockControls: true, lockHide: 9, lockHint: true, pinned: [], perf: 'auto', realViz: false, off: [], setupDone: false, vizHidden: [], discord: false, discordId: '', lyrics: true, headphonesPause: true, plSort: 'added', plView: 'list', swipeRows: true, speed: 1 } };
 
 /* ── Pinned playlists: quick access in the sidebar, on Home, with Alt+1..9 and Android launcher shortcuts ── */
 const pinnedPls = () => (Array.isArray(S.settings.pinned) ? S.settings.pinned : []).map(id => S.playlists.find(p => p.id === id)).filter(Boolean);
@@ -263,6 +263,33 @@ function syncExtras() {
   </div>`;
 }
 
+/* ── In-app updates ── */
+async function updLoad(check) {
+  try { R.upd = await api(check ? '/api/update/check' : '/api/update/status', check ? { method: 'POST', json: {} } : {}); if (check) { S.settings.updCheckedAt = Date.now(); save(); } }
+  catch (e) { R.upd = { error: e.message || 'Could not reach the update service', canUpdate: false }; }
+  paintUpd(); return R.upd;
+}
+function updHTML() {
+  const u = R.upd; if (!u) return '<p class="mut">Reading version…</p>';
+  const a = u.available, link = 'https://github.com/thegoldertrone7-cyber/wavelength/releases/latest';
+  let line = `<div class="line"><div><div class="l">Wavelength ${esc(u.running || '')}</div><div class="s">${u.error ? esc(u.error) : u.staged ? `Version ${esc(u.staged)} is downloaded and ready.` : a ? `Version ${esc(a.version)} is available${a.size ? ' (' + Math.max(1, Math.round(a.size / 1024)) + ' KB)' : ''}.` : u.checkedAt ? 'You are up to date.' : 'Not checked yet.'}${u.rolledBack ? ' A broken update was rolled back automatically.' : ''}</div>${a && a.notes ? `<div class="s">${esc(a.notes)}</div>` : ''}</div><div class="acts">`;
+  if (u.staged) line += '<button class="btn solid" data-act="upd-restart">Restart now</button>';
+  else if (a && a.needsInstaller) line += `<a class="btn" href="${link}" target="_blank" rel="noopener">Get installer</a>`;
+  else if (a) line += '<button class="btn solid" data-act="upd-install">Install update</button>';
+  else line += '<button class="btn" data-act="upd-check">Check now</button>';
+  line += '</div></div>';
+  if (a && a.needsInstaller) line += `<p class="meta">This update changes the app itself, so install the new version once. After that, updates arrive inside the app.</p>`;
+  return line;
+}
+function paintUpd() { const b = $('#upd-box'); if (b) b.innerHTML = updHTML(); }
+async function autoUpdateCheck() {
+  if (S.settings.autoUpdate === false || Date.now() - (+S.settings.updCheckedAt || 0) < 432e5) return;
+  const u = await updLoad(true);
+  if (u && u.available && !u.available.needsInstaller) {
+    try { R.upd = await api('/api/update/install', { method: 'POST', json: {} }); paintUpd(); toast(`Version ${R.upd.staged || ''} is ready. Restart to use it.`); } catch {}
+  }
+}
+
 /* ── Optional features ── Switching one off hides its controls and stops its work. */
 const FEATURES = [
   ['viz', 'Visualizer', 'Animated visuals in the full-screen player.'],
@@ -303,6 +330,7 @@ const vizVisible = () => WLViz.styles.filter(x => !vizHiddenList().includes(x.id
 let S = structuredClone(DEF);
 const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null, playCtx: '', viewList: null, recapYear: new Date().getFullYear(), recapFrom: '', recapTo: '', infoCache: {}, credits: null, creditDone: '', listenTick: 0, normGain: 1, normReady: 0, remix: null };
 R.devices = []; R.folder = null;
+R.upd = null;
 let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api('/api/state', { method: 'PUT', json: S }).catch(() => {}), 400); };
 let toastT;
 const toast = (m, undo) => {
@@ -1860,7 +1888,7 @@ function vSet() {
     </div>
     <div class="set-find rise" style="--i:1">${I.search}<input id="set-find" type="search" placeholder="Find a setting — theme, audio, sync…" autocomplete="off" aria-label="Find a setting"><button class="set-find-clear" data-act="set-clear" title="Clear filter" aria-label="Clear filter">${I.close}</button></div>
     <nav class="set-jump rise" aria-label="Settings sections">
-      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-filters">Filters</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button>${NATIVE ? '<button data-scroll="set-lock">Lock screen</button>' : ''}<button data-scroll="set-features">Features</button><button data-scroll="set-status">Status</button>
+      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-filters">Filters</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button>${NATIVE ? '<button data-scroll="set-lock">Lock screen</button>' : ''}<button data-scroll="set-updates">Updates</button><button data-scroll="set-features">Features</button><button data-scroll="set-status">Status</button>
     </nav>
     <div id="set-empty" class="empty set-empty" hidden>No setting matches that search.</div><div class="set">
     <div class="box rise" style="--i:0" id="set-appearance"><h2>Appearance</h2><p class="mut">Choose a palette, then tune the accent. Interface styles are layered on top without changing your colors.</p>
@@ -1897,7 +1925,11 @@ function vSet() {
       ${NATIVE ? `${tg('lockVisualizer', 'Lock-screen now playing', 'When you lock the phone during playback, Wavelength briefly shows the artwork, the song and a visualizer over the lock screen.')}
       <div class="line"><div><div class="l">Lock-screen preview</div><div class="s">Open the brief now-playing screen without locking the phone.</div></div><button class="btn" data-act="preview-lock">Preview</button></div>
       ${nativeLockAllowed() ? '' : `<div class="line"><div><div class="l">Allow lock-screen display</div><div class="s">Android needs permission before an app can appear over the lock screen.</div></div><button class="btn" data-act="allow-lockscreen">Allow</button></div>`}` : ''}</div>
-    <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs. Never used while shuffle is on.')}
+    <div class="box rise" style="--i:2" id="set-playback"><h2>Playback</h2>
+      <div class="line"><div><div class="l">Connection</div><div class="s">${poorNet() ? 'Poor connection mode is on: smallest audio, songs prepared early.' : 'Normal.'} Automatic switches to Poor after repeated stalls or a slow network and back again after a few quiet minutes.</div></div><select class="inp" data-set="netMode" aria-label="Connection mode">${[['auto', 'Automatic'], ['normal', 'Normal'], ['poor', 'Poor connection']].map(([v, n]) => `<option value="${v}"${(s.netMode || 'auto') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      ${tg('stayInList', 'Stay inside playlists', 'Endless playback never adds songs from outside the playlist you started. Shuffle already stays inside it.')}
+      ${tg('shuffleSmart', 'Smarter shuffle', 'Keeps shuffle random but spreads the same artist apart and plays songs you just heard later.')}
+      ${tg('autoplay', 'Endless playback', 'When your queue ends, keep going with similar songs. Never used while shuffle is on.')}
       ${NATIVE ? '' : tg('gapless', 'Gapless transitions', 'Prepares the next track early for a smoother change.')}
       ${tg('resume', 'Resume last session', 'Restore your queue and position next time you open Wavelength.')}
       ${NATIVE ? `<div class="line"><div><div class="l">Volume</div><div class="s">Controls the phone’s media volume, the same stream the hardware keys change.</div></div><input class="inp range" type="range" min="0" max="100" step="1" value="${Math.round((s.volume || 0) * 100)}" data-volset aria-label="Volume"></div>` : ''}
@@ -1941,6 +1973,9 @@ function vSet() {
       ${tg('lockControls', 'Playback buttons', 'Previous, play or pause, and next.')}
       <div class="line"><div><div class="l">Stay visible</div><div class="s">How long it stays before fading out. Always stays until you unlock.</div></div><select class="inp" data-set="lockHide" aria-label="Lock-screen duration">${[[5, '5 seconds'], [9, '9 seconds'], [15, '15 seconds'], [0, 'Always']].map(([v, n]) => `<option value="${v}"${+(s.lockHide ?? 9) === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
       ${tg('lockHint', 'Show the hint line', 'The small “tap to keep” text at the bottom.')}</div>` : ''}
+    <div class="box rise" style="--i:5" id="set-updates"><h2>Updates</h2><p class="mut">Updates to the interface and player download inside the app and need no installer.</p>
+      <div id="upd-box">${updHTML()}</div>
+      ${tg('autoUpdate', 'Update automatically', 'Checks when Wavelength opens and downloads updates in the background. You choose when to restart.')}</div>
     <div class="box rise" style="--i:5" id="set-features"><h2>Features</h2><p class="mut">Switch off what you do not use. Hidden features stop running and their screens and buttons disappear.</p>
       ${FEATURES.map(([k, n, d]) => `<div class="line"><div><div class="l">${esc(n)}</div><div class="s">${esc(d)}</div></div><button class="tg${featOn(k) ? ' on' : ''}" data-act="feat-toggle" data-k="${k}" aria-label="${esc(n)}" aria-pressed="${featOn(k)}"></button></div>`).join('')}
       ${NATIVE ? '' : `<div class="line"><div><div class="l">Discord Rich Presence</div><div class="s">Shows the song you are playing on your Discord profile. Needs the Discord desktop app open and an Application ID from discord.com/developers. Sends the title, artist and cover only to your local Discord.</div></div><button class="tg${s.discord ? ' on' : ''}" data-act="discord-toggle" aria-label="Discord Rich Presence" aria-pressed="${!!s.discord}"><i></i></button></div>
@@ -2595,7 +2630,21 @@ function updateTransport() {
   }
 }
 
-const qualityParam = () => S.settings.streamQuality === 'saver' ? 'saver' : 'best';
+/* Connection quality: Automatic watches the browser's network hints and real stalls. */
+R.stalls = [];
+const netConn = () => navigator.connection || navigator.mozConnection || {};
+const netSlow = () => { const c = netConn(); return !!c.saveData || /(^|-)2g$|^3g$/.test(c.effectiveType || '') || (c.downlink > 0 && c.downlink < 1.2) || c.rtt > 900; };
+const poorNet = () => { const m = S.settings.netMode; if (m === 'poor') return true; if (m === 'normal') return false; return netSlow() || R.stalls.filter(t => Date.now() - t < 18e4).length >= 2; };
+const qualityParam = () => poorNet() ? (NATIVE ? 'saver' : 'poor') : S.settings.streamQuality === 'saver' ? 'saver' : 'best';
+let waitT = 0;
+function longWait() {
+  if (!R.cur || !R.playing || audio.paused) return;
+  const was = poorNet(); R.stalls.push(Date.now());
+  if (!was && poorNet()) toast('Slow connection. Switched to data-saver audio.');
+  doPlayTrack(R.cur, playTok, 1, audio.currentTime || 0);
+}
+const clearWait = () => { clearTimeout(waitT); waitT = 0; };
+addEventListener('online', () => { if (R.cur && R.playing && audio.paused === false && audio.readyState < 3) doPlayTrack(R.cur, playTok, 1, audio.currentTime || 0); });
 async function trackSrc(t, attempt = 0, preload = false) {
   if (!t) return '';
   if (t.localId) return '/api/local/' + encodeURIComponent(t.localId) + '/stream' + (attempt ? '?r=' + attempt : '');
@@ -2629,21 +2678,45 @@ function cancelPrepared() {
 
 function schedulePrepare(delay = 1800) {
   clearTimeout(prepareTimer);
-  if (!S.settings.gapless) return;
+  if (!S.settings.gapless && !poorNet()) return;
   prepareTimer = setTimeout(() => { prepareNext(); }, delay);
 }
 
 /* A shuffled queue needs a stable order so preloading, gapless transitions
    and manual Next agree on the same track. The current song always sits at
    the front of a fresh cycle, then every other song plays exactly once. */
-function shuffleIndices(len, first = -1) {
-  const rest = [];
+function shuffleIndices(len, first = -1, avoid = -1) {
+  let rest = [];
   for (let i = 0; i < len; i++) if (i !== first) rest.push(i);
   for (let i = rest.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [rest[i], rest[j]] = [rest[j], rest[i]];
   }
+  if (S.settings.shuffleSmart !== false && rest.length > 3) rest = smartSpread(rest, first);
+  // A new cycle should not open with the song that just finished.
+  if (first < 0 && avoid >= 0 && rest.length > 1 && rest[0] === avoid) { const k = 1 + Math.floor(Math.random() * (rest.length - 1)); [rest[0], rest[k]] = [rest[k], rest[0]]; }
   return first >= 0 ? [first, ...rest] : rest;
+}
+/* Keeps the shuffle random but stops the same artist playing twice in a row and
+   moves songs you heard very recently towards the end of the cycle. */
+function smartSpread(order, first) {
+  const artist = i => String((R.queue[i] && R.queue[i].artist) || '').toLowerCase().split(/[,&]| feat\.? | x /)[0].trim();
+  const recent = new Set((S.history || []).slice(0, 25).map(uid));
+  let pool = order.slice();
+  if (pool.length >= 20) {
+    const fresh = pool.filter(i => !recent.has(uid(R.queue[i]))), old = pool.filter(i => recent.has(uid(R.queue[i])));
+    const cut = Math.floor(fresh.length * 0.4);
+    const tail = fresh.splice(fresh.length - Math.max(0, fresh.length - cut)).concat(old);
+    for (let i = tail.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tail[i], tail[j]] = [tail[j], tail[i]]; }
+    pool = fresh.concat(tail);
+  }
+  const out = []; let prev = first >= 0 ? artist(first) : '';
+  while (pool.length) {
+    let k = pool.findIndex(i => !prev || !artist(i) || artist(i) !== prev);
+    if (k < 0 || k > 12) k = k < 0 ? 0 : k;
+    const [i] = pool.splice(k, 1); out.push(i); prev = artist(i);
+  }
+  return out;
 }
 
 function resetShuffleOrder() {
@@ -2660,6 +2733,7 @@ function syncShuffleOrder() {
   } else {
     R.shufflePos = R.shuffleOrder.indexOf(R.idx);
   }
+  R.shuffleItems = R.shuffleOrder.map(i => R.queue[i]);
 }
 
 function peekNextIdx() {
@@ -2670,7 +2744,7 @@ function peekNextIdx() {
   if (R.shufflePos + 1 >= R.shuffleOrder.length) {
     // A shuffle cycle plays every song once. Only repeat-all starts another.
     if (R.repeat !== 1) return -1;
-    R.shuffleOrder = shuffleIndices(R.queue.length, -1);
+    R.shuffleOrder = shuffleIndices(R.queue.length, -1, R.idx);
     R.shufflePos = -1;
   }
   return R.shuffleOrder[R.shufflePos + 1] ?? -1;
@@ -2691,8 +2765,25 @@ function shuffleNearEnd() {
 
 /* Queue edits invalidate the shuffle permutation and any audio buffered for
    the old "next" track. Warm the newly chosen next immediately. */
+/* Queue edits keep the songs you have already heard in this cycle. Removed songs drop out, songs added with
+   "Play next" go straight after the current one and anything else lands at a random later spot. */
+function reconcileShuffle() {
+  const items = R.shuffleItems;
+  if (!R.shuffle || !items || !items.length || R.idx < 0) return resetShuffleOrder();
+  const at = new Map(); R.queue.forEach((t, i) => at.set(t, i));
+  const kept = items.filter(t => at.has(t));
+  const cur = R.queue[R.idx], ci = kept.indexOf(cur);
+  if (ci < 0) return resetShuffleOrder();
+  const keptSet = new Set(kept), nextBlock = [];
+  for (let i = R.idx + 1; i < R.queue.length && !keptSet.has(R.queue[i]); i++) nextBlock.push(R.queue[i]);
+  const nb = new Set(nextBlock), rest = R.queue.filter(t => !keptSet.has(t) && !nb.has(t));
+  const order = kept.slice(); order.splice(ci + 1, 0, ...nextBlock);
+  for (const t of rest) order.splice(ci + 1 + nextBlock.length + Math.floor(Math.random() * (order.length - ci - nextBlock.length)), 0, t);
+  R.shuffleOrder = order.map(t => at.get(t)); R.shufflePos = R.shuffleOrder.indexOf(R.idx);
+  R.shuffleItems = order;
+}
 function refreshQueue() {
-  resetShuffleOrder();
+  reconcileShuffle();
   cancelPrepared();
   if (!R.cur || !R.queue.length) return;
   const ni = peekNextIdx();
@@ -2703,7 +2794,7 @@ function refreshQueue() {
 function prepareNext() {
   cancelPrepared();
   if (NATIVE) return;
-  if (!S.settings.gapless || !R.cur || R.repeat === 2) return;
+  if ((!S.settings.gapless && !poorNet()) || !R.cur || R.repeat === 2) return;
   const idx = peekNextIdx(), t = R.queue[idx];
   if (!t) return;
   if (!t.localId && !t.ytId) {
@@ -2897,7 +2988,7 @@ function startStall() {
     if (!R.playing || audio.paused) return;
     if (Math.abs(audio.currentTime - stallLastTime) < 0.1) {
       // Stalled — reload stream
-      if (R.cur && R.cur.ytId) doPlay(R.cur.ytId, playTok, 1);
+      if (R.cur && R.cur.ytId) doPlayTrack(R.cur, playTok, 1, audio.currentTime || 0);
     }
     stallLastTime = audio.currentTime;
   }, 10000);
@@ -2909,6 +3000,7 @@ function warmNext() {
   const ni = peekNextIdx();
   const n = ni >= 0 ? R.queue[ni] : null;
   if (n) warmTrack(n);
+  if (poorNet() && ni >= 0) { const nn = R.queue[(R.shuffle ? R.shuffleOrder[R.shufflePos + 2] : ni + 1)]; if (nn) warmTrack(nn); }
   schedulePrepare(1800);
   if (nearEnd && S.settings.autoplay && R.repeat !== 1) extend();
 }
@@ -2954,6 +3046,7 @@ async function extend() {
   // Shuffle is a closed set: it must never pull in songs from outside the
   // playlist/search the user started. A shuffled queue simply ends.
   if (R.shuffle) return 0;
+  if (S.settings.stayInList !== false && (R.playCtx === 'Liked Songs' || R.playCtx === 'Smart shuffle' || S.playlists.some(p => p.name === R.playCtx))) return 0;
   if (extending || !R.cur || !R.cur.ytId) return 0; extending = true;
   try {
     const r = await api('/api/related/' + R.cur.ytId + (S.settings.noAi ? '?noAi=1' : ''));
@@ -3263,7 +3356,8 @@ for (const el of audioEls) {
   el.addEventListener('loadedmetadata', () => { if (el === audio) { uiTime(); smartRebuild(); } });
   el.addEventListener('seeking', () => { if (el === audio) smartSeeking(); });
   el.addEventListener('stalled',  () => { if (el === audio) console.warn('[audio] stalled'); });
-  el.addEventListener('waiting',  () => { if (el === audio) { console.warn('[audio] waiting/buffering'); setBuffering(true); } });
+  el.addEventListener('waiting',  () => { if (el === audio) { console.warn('[audio] waiting/buffering'); setBuffering(true); if (!waitT) waitT = setTimeout(() => { waitT = 0; longWait(); }, 8000); } });
+  for (const ev of ['playing', 'canplaythrough']) el.addEventListener(ev, () => { if (el === audio) clearWait(); });
 }
 addEventListener('offline', () => toast('Offline — saved songs will still play'));
 addEventListener('online',  () => toast('Back online'));
@@ -3713,7 +3807,7 @@ async function uploadImage(file) {
 async function uploadCover(file) {
   try {
     grabName();
-    const url = await uploadImage(file);
+    const url = NATIVE ? await songImage(file) : await uploadImage(file);
     M.up.push(url); M.cover = { ...M.cover, url }; drawPlModal();
   } catch (e) { toast('Couldn’t use that image: ' + e.message); }
 }
@@ -3726,9 +3820,10 @@ function savePl() {
   if (M.id) {
     pl = S.playlists.find(p => p.id === M.id);
     const oldUrl = pl.cover && pl.cover.url;
+    if (JSON.stringify(pl.cover || {}) !== JSON.stringify(cover)) pl.coverAt = Date.now();
     pl.name = name; pl.cover = cover;
     if (oldUrl && oldUrl !== cover.url) delCover(oldUrl);
-  } else { pl = { id: rid(), name, cover, tracks: [] }; S.playlists.push(pl); }
+  } else { pl = { id: rid(), name, cover, coverAt: Date.now(), tracks: [] }; S.playlists.push(pl); }
   M.up.filter(u => u !== cover.url).forEach(delCover);
   if (M.addTrack && !pl.tracks.some(x => uid(x) === uid(M.addTrack))) { pl.tracks.push({ ...M.addTrack, addedAt: Date.now() }); toast(`Added to ${pl.name}`); } else toast(M.id ? 'Saved' : `“${name}” created`);
   save(); closeModal(true); drawSide(); refreshView(); saveSession();
@@ -4148,6 +4243,9 @@ const acts = {
     R.recapView = n === '90' ? 'weeks' : 'days';
     nav('recap/' + f(from) + '~' + f(to));
   },
+  'upd-check': () => updLoad(true),
+  'upd-install': async () => { try { toast('Downloading update…'); R.upd = await api('/api/update/install', { method: 'POST', json: {} }); paintUpd(); toast('Update ready. Restart to use it.'); } catch (e) { toast(e.message || 'Update failed'); } },
+  'upd-restart': async () => { try { const r = await api('/api/update/restart', { method: 'POST', json: {} }); if (NATIVE) setTimeout(() => location.reload(), 400); else if (r && r.manual) toast('Close and reopen Wavelength to finish updating.'); } catch { toast('Close and reopen Wavelength to finish updating.'); } },
   pinpl: el => togglePin(el.dataset.id),
   'feat-pick': el => {
     const k = el.dataset.k; featDraft.has(k) ? featDraft.delete(k) : featDraft.add(k);
@@ -4893,7 +4991,7 @@ function discordPush(now) {
 }
 ['play', 'pause', 'seeked', 'loadedmetadata'].forEach(ev => document.addEventListener(ev, () => discordPush(), true));
 document.addEventListener('change', e => { if (e.target && e.target.id === 'discord-id') { S.settings.discordId = e.target.value.trim(); save(); discordPush(true); } });
-new MutationObserver(hideOffSettings).observe(document.getElementById('view'), { childList: true });
+new MutationObserver(() => { hideOffSettings(); if ($('#upd-box') && !R.upd) updLoad(false); }).observe(document.getElementById('view'), { childList: true });
 
 (async function boot() {
   $$('[data-ic]').forEach(e => e.innerHTML = I[e.dataset.ic]); buildDm();
@@ -4929,6 +5027,8 @@ new MutationObserver(hideOffSettings).observe(document.getElementById('view'), {
   applyScrollbar(); applyLayout(); applyDots(); applyCustomCss(); ovApplyAll(); applySpeed(); WLMotion.parallax($('#main'), () => $('#view .ph'));
   applyPerf(); applyFeatures(); syncShortcuts();
   await refreshHealth(); await route(); restoreSession();
+  setTimeout(() => { try { window.AndroidBridge.confirmWebUpdate(); } catch {} }, 3000);
+  setTimeout(autoUpdateCheck, 12000);
   if (!S.settings.setupDone) { S.settings.setupDone = true; save(); setTimeout(featureSetup, 350); } localLoad(); syncLoad().then(() => syncAutoCheck(true)); syncPoll(); folderLoad();
   booted = true;
   launchQueue.splice(0).forEach(([c, a]) => window.wlLaunch(c, a));

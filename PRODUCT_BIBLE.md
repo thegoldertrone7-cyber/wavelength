@@ -10,16 +10,16 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.1** stable · **2.6.0** Overhaul | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.1** stable · **2.6.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Android APK | **v2.4.1** stable · **2.7.0** Overhaul | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** stable · **2.7.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.1** stable · **Overhaul** branch | Runs through the bundled Node server |
 
 `v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
 arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
 Android **Smart volume** and the full-screen volume meter. A second, separate release —
-**Overhaul 2.6.0**, built from the `Overhaul` branch — ships the same platforms with the smart
-intro/outro skipper, window layouts, extra themes, lyrics and song-editor upgrades, plus the motion,
-visualizer, queue and Android work described in §11.1. This document describes shipped behaviour first and
+**Overhaul 2.7.0**, built from the `Overhaul` branch — ships the same platforms with in-app
+updates, plus the smart intro/outro skipper, window layouts, extra themes, lyrics and song-editor
+upgrades, and the motion, visualizer, queue and Android work described in §11.1. This document describes shipped behaviour first and
 future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
@@ -1098,6 +1098,15 @@ cloud product.
   by this artist / duplicate playlist menu actions.
 - **New app icon** across macOS, Windows, Linux, Android, the web app and the Flatpak.
 
+**Shipped in Overhaul 2.7.0**
+
+- **In-app updates.** A signed bundle of `public/`, `server.js`, `discord-rpc.js`, `updater.js` and
+  `package.json` is verified with SHA-256 and an ECDSA P-256 signature, unpacked into the user's
+  data folder and used from the next start. A bundle that never confirms a successful start is
+  dropped and the next launch falls back to the installed copy. A `minShell` field sends changes to
+  the native shell back through an installer. Builds produced without a signing key report that
+  updates are not set up; the key setup and release steps are in `UPDATES.md`.
+
 ### 11.2 Not in this build
 
 | Item | Status | Notes |
@@ -1142,7 +1151,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The stable installers are all v2.4.1; Overhaul is a separate 2.6.0 release.** The desktop
+8. **The stable installers are all v2.4.1; Overhaul is a separate 2.7.0 release.** The desktop
    builds are unsigned, so macOS and Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1179,7 +1188,9 @@ These are repeated in the interface and should remain true in every future relea
 - **Overhaul 2.6.0** — smart intro/outro skipper, window layouts, 33 more themes with a dotted
   background and custom CSS, synced lyrics, song-editor upgrades and the new app icon. Includes
   everything from 2.5.1 and ships on the same four platforms.
-- The latest stable release remains **v2.4.1**; Overhaul 2.6.0 is published beside it and is not
+- **Overhaul 2.7.0** — in-app updates with signed bundles, automatic rollback and installer
+  fallback for native changes. Includes everything from 2.6.0 and ships on the same four platforms.
+- The latest stable release remains **v2.4.1**; Overhaul 2.7.0 is published beside it and is not
   marked latest.
 
 ### 12.2 Phase 1 — Stabilise the instrument

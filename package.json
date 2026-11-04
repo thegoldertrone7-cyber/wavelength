@@ -1,7 +1,7 @@
 {
   "name": "wavelength",
   "productName": "Wavelength",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Free, ad-free music app: import Spotify links, play via YouTube, download MP3s.",
   "author": "Wavelength",
   "private": true,
@@ -12,7 +12,9 @@
     "app": "electron .",
     "dist:mac": "electron-builder --mac dmg --publish never",
     "dist:win": "electron-builder --win nsis --publish never",
-    "dist:linux": "electron-builder --linux AppImage --publish never"
+    "dist:linux": "electron-builder --linux AppImage --publish never",
+    "make:update": "node scripts/make-update.js",
+    "make:update:init": "node scripts/make-update.js --init"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -24,6 +26,8 @@
     "executableName": "wavelength",
     "files": [
       "server.js",
+      "update-pubkey.pem",
+      "updater.js",
       "discord-rpc.js",
       "public/**/*",
       "!public/**/*.bak",

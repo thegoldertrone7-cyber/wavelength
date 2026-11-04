@@ -617,6 +617,8 @@ cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/
 cp "$ROOT/scripts/android/WavelengthWidget.java" "$PROJECT/app/src/main/java/app/wavelength/music/WavelengthWidget.java"
 cp "$ROOT/scripts/android/NowPlayingActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/NowPlayingActivity.java"
 cp "$ROOT/scripts/android/VizView.java" "$PROJECT/app/src/main/java/app/wavelength/music/VizView.java"
+cp "$ROOT/scripts/android/WebUpdater.java" "$PROJECT/app/src/main/java/app/wavelength/music/WebUpdater.java"
+if [ -f "$ROOT/update-pubkey.pem" ]; then cp "$ROOT/update-pubkey.pem" "$PROJECT/app/src/main/assets/update-pubkey.pem"; fi
 cp "$ROOT/scripts/android/AudioTap.java" "$PROJECT/app/src/main/java/app/wavelength/music/AudioTap.java"
 cp "$ROOT/scripts/android/LoudnessAnalyzer.java" "$PROJECT/app/src/main/java/app/wavelength/music/LoudnessAnalyzer.java"
 

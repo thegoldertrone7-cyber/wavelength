@@ -259,6 +259,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private final AudioTap audioTap = new AudioTap();
+    private WebUpdater updater;
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
@@ -295,8 +296,10 @@ public class MainActivity extends AppCompatActivity {
         wv.setWebChromeClient(new WebChromeClient());
         wv.addJavascriptInterface(new Bridge(), "AndroidBridge");
 
+        updater = new WebUpdater(this);
+        updater.prepare();
         assetLoader = new WebViewAssetLoader.Builder()
-            .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/assets/", updater.handler(new WebViewAssetLoader.AssetsPathHandler(this)))
             .build();
 
         wv.setWebViewClient(new WebViewClient() {
@@ -547,6 +550,9 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public void confirmWebUpdate() { if (updater != null) updater.confirm(); }
+
+        @JavascriptInterface
         public String startAudioTap() {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return "denied";
             return audioTap.start() ? "ok" : "unavailable";
@@ -743,6 +749,14 @@ public class MainActivity extends AppCompatActivity {
             throw new Exception("Spotify import is not available in the standalone Android build yet.");
         }
 
+        if ("/api/update/status".equals(p)) return updater.status().toString();
+        if ("/api/update/check".equals(p)) return updater.check().toString();
+        if ("/api/update/install".equals(p)) return updater.install().toString();
+        if ("/api/update/restart".equals(p)) {
+            final boolean ok = updater.applyNow();
+            wv.post(() -> wv.loadUrl(START_URL));
+            return new JSONObject().put("ok", ok).toString();
+        }
         if ("/api/sync/remote".equals(p)) return syncRemoteNow(body).toString();
         if ("/api/sync/status".equals(p)) return syncStatus().toString();
         if ("/api/sync/join".equals(p)) return syncJoin(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
@@ -1575,6 +1589,7 @@ public class MainActivity extends AppCompatActivity {
                 } else {
                     have.put("tracks", unionTracks(have.optJSONArray("tracks"), p.optJSONArray("tracks")));
                     if (have.optString("name", "").isEmpty() && !p.optString("name", "").isEmpty()) have.put("name", p.optString("name"));
+                    if (p.optLong("coverAt", 0) > have.optLong("coverAt", 0) && p.opt("cover") != null) { have.put("cover", p.opt("cover")); have.put("coverAt", p.optLong("coverAt", 0)); }
                     if (have.optString("cover", "").isEmpty() && !p.optString("cover", "").isEmpty()) have.put("cover", p.opt("cover"));
                     if (have.optString("description", "").isEmpty() && !p.optString("description", "").isEmpty()) have.put("description", p.optString("description"));
                 }
