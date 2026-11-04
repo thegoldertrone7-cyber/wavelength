@@ -38,7 +38,12 @@ mark. Every installer and the APK are 2.6.0.
 `Wavelength-2.6.0-android.apk.sha256`.
 
 ```
-__OVERHAUL_SUMS__
+a414d0a9965072536130d45842cde63a309ba4a8b43c12f8263aeb0b03545f0c  Wavelength-2.6.0-android.apk
+5a3fc1ee253398702977ae7d01374c603781203f7f1c58752f45545daf7607fb  Wavelength-2.6.0-linux-arm64.AppImage
+b60e2e4d0b1e29070cdc6c384ff34dc201ab253a59b15c3f476f541be6244808  Wavelength-2.6.0-linux-x86_64.flatpak
+ea61419994b6f8746678cfc09511454c0ab16f4a6eefca93f600dee4e74c53d5  Wavelength-2.6.0-linux.AppImage
+b03cfdf38e40e3ba0f71b54d001c8bdcfa9ffa181b0c36499b165cc454bbc936  Wavelength-2.6.0-macos-universal.dmg
+4d2f203e8dc21c647ca5026465d3377aaa71a140387191a39c007d9eafc99405  Wavelength-2.6.0-windows-setup.exe
 ```
 
 ## Stable: v2.4.1
