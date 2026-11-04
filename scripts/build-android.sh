@@ -91,6 +91,8 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<'EOF'
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
   <application
     android:allowBackup="true"
     android:icon="@mipmap/ic_launcher"
@@ -615,6 +617,7 @@ cp "$ROOT/scripts/android/PlaybackService.java" "$PROJECT/app/src/main/java/app/
 cp "$ROOT/scripts/android/WavelengthWidget.java" "$PROJECT/app/src/main/java/app/wavelength/music/WavelengthWidget.java"
 cp "$ROOT/scripts/android/NowPlayingActivity.java" "$PROJECT/app/src/main/java/app/wavelength/music/NowPlayingActivity.java"
 cp "$ROOT/scripts/android/VizView.java" "$PROJECT/app/src/main/java/app/wavelength/music/VizView.java"
+cp "$ROOT/scripts/android/AudioTap.java" "$PROJECT/app/src/main/java/app/wavelength/music/AudioTap.java"
 cp "$ROOT/scripts/android/LoudnessAnalyzer.java" "$PROJECT/app/src/main/java/app/wavelength/music/LoudnessAnalyzer.java"
 
 mkdir -p "$ROOT/dist"

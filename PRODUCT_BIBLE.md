@@ -10,16 +10,16 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.1** stable · **2.5.1** Overhaul | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.1** stable · **2.5.1** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Android APK | **v2.4.1** stable · **2.6.0** Overhaul | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** stable · **2.6.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.1** stable · **Overhaul** branch | Runs through the bundled Node server |
 
 `v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
 arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
 Android **Smart volume** and the full-screen volume meter. A second, separate release —
-**Overhaul 2.5.1**, built from the `Overhaul` branch — ships the same platforms with motion v3,
-playback speed and song editing, plus the visualizer gallery, queue and playlist tools, sleep timer
-and Android widget work described in §11.1. This document describes shipped behaviour first and
+**Overhaul 2.6.0**, built from the `Overhaul` branch — ships the same platforms with the smart
+intro/outro skipper, window layouts, extra themes, lyrics and song-editor upgrades, plus the motion,
+visualizer, queue and Android work described in §11.1. This document describes shipped behaviour first and
 future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
 
@@ -1083,6 +1083,21 @@ cloud product.
 - Android decodes chosen data-URI artwork for the lock screen, notification and widget instead of
   trying to download it.
 
+**Shipped in Overhaul 2.6.0**
+
+- **Smart intro/outro skipper** with four independent sources — chapters, description timestamps,
+  SponsorBlock data and ffmpeg silence detection — merged with confidence scores. Each intro,
+  outro and break can be Off, show a Skip button or skip automatically; Undo, learning from
+  rewinds, seek-bar marks and **K** to skip. Unit tests live in `tests/skipper.test.js`.
+- **Window layouts**: sidebar left, right, top, rail or hidden; player bottom, top or floating;
+  centred content; eight presets with previews. Wide windows only.
+- **33 more themes** in `public/js/themes.js`, a dotted background with opacity and spacing, and a
+  custom CSS box.
+- **Synced lyrics** from LRCLIB, opened with **Y**, with tap-to-seek and lookups only on demand.
+- **Song editor upgrades**: Spotify image button, Enter to confirm, rounded scrollbars, and more
+  by this artist / duplicate playlist menu actions.
+- **New app icon** across macOS, Windows, Linux, Android, the web app and the Flatpak.
+
 ### 11.2 Not in this build
 
 | Item | Status | Notes |
@@ -1127,7 +1142,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The stable installers are all v2.4.1; Overhaul is a separate 2.5.1 release.** The desktop
+8. **The stable installers are all v2.4.1; Overhaul is a separate 2.6.0 release.** The desktop
    builds are unsigned, so macOS and Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1161,7 +1176,10 @@ These are repeated in the interface and should remain true in every future relea
 - **Overhaul 2.5.1** — motion v3 (travelling covers, gliding lists and highlights, artwork fades),
   playback speed, editable song title/artist/artwork with undo, and Android chosen-artwork
   decoding. Includes everything from 2.5.0 and ships on the same four platforms.
-- The latest stable release remains **v2.4.1**; Overhaul 2.5.1 is published beside it and is not
+- **Overhaul 2.6.0** — smart intro/outro skipper, window layouts, 33 more themes with a dotted
+  background and custom CSS, synced lyrics, song-editor upgrades and the new app icon. Includes
+  everything from 2.5.1 and ships on the same four platforms.
+- The latest stable release remains **v2.4.1**; Overhaul 2.6.0 is published beside it and is not
   marked latest.
 
 ### 12.2 Phase 1 — Stabilise the instrument

@@ -234,13 +234,24 @@ async function related(id) {
    start repeatedly and yt-dlp is expensive. */
 const INFO_TTL = 60 * 60 * 1000, INFO_MAX = 200;
 const infoCache = new Map();
+const INFO_FILE = 'info-cache.json', INFO_DISK_TTL = 30 * 24 * 3600 * 1000, INFO_DISK_MAX = 2500, INFO_VER = 2;
+let infoDisk = readJSON(INFO_FILE, {}), infoDiskDirty = false;
+function rememberInfo(id, value) {
+  infoDisk[id] = { v: INFO_VER, at: Date.now(), value };
+  const keys = Object.keys(infoDisk);
+  if (keys.length > INFO_DISK_MAX) for (const k of keys.sort((a, b) => (infoDisk[a].at || 0) - (infoDisk[b].at || 0)).slice(0, keys.length - INFO_DISK_MAX)) delete infoDisk[k];
+  if (!infoDiskDirty) { infoDiskDirty = true; setTimeout(() => { infoDiskDirty = false; try { writeJSON(INFO_FILE, infoDisk); } catch {} }, 5000).unref?.(); }
+}
 async function videoInfo(id) {
   const hit = infoCache.get(id);
   if (hit && Date.now() - hit.at < INFO_TTL) return hit.value;
+  const disk = infoDisk[id];
+  if (disk && disk.v === INFO_VER && Date.now() - disk.at < INFO_DISK_TTL) { infoCache.set(id, { at: Date.now(), value: disk.value }); return disk.value; }
   const out = await limited(() => ytdlp(['-j', '--no-warnings', '--no-playlist', `https://www.youtube.com/watch?v=${id}`], { timeout: 30000 }));
   const j = lines(out)[0] || {};
   const value = {
     duration: Math.round(+j.duration || 0),
+    description: String(j.description || '').slice(0, 6000),
     chapters: Array.isArray(j.chapters) ? j.chapters.slice(0, 100).map(c => ({
       title: String(c.title || '').slice(0, 200),
       start: Math.round(+c.start_time || 0),
@@ -248,8 +259,80 @@ async function videoInfo(id) {
     })) : [],
   };
   infoCache.set(id, { at: Date.now(), value });
+  rememberInfo(id, value);
   while (infoCache.size > INFO_MAX) infoCache.delete(infoCache.keys().next().value);
   return value;
+}
+
+/* ════════════════════════════════════════════════════════════
+   SILENCE MAP — powers the smart intro/outro skipper.
+
+   Once a track is fully cached, ffmpeg's silencedetect finds every stretch of
+   near-silence. The client turns those into "skip the quiet lead-in", "skip
+   the dead air at the end" and "skip a long gap before a hidden track". One
+   ffmpeg at a time, results remembered on disk.
+   ════════════════════════════════════════════════════════════ */
+const SILENCE_FILE = 'silence-cache.json', SILENCE_VER = 2, SILENCE_MAX = 3000;
+let silenceCache = readJSON(SILENCE_FILE, {});
+let silenceDirty = false, silenceChain = Promise.resolve(), silenceMissing = false;
+const silenceBusy = new Map();
+function parseSilence(text) {
+  const d = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
+  const dur = d ? (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]) : 0;
+  const out = []; let start = null;
+  for (const line of text.split('\n')) {
+    let m = /silence_start:\s*(-?\d+(?:\.\d+)?)/.exec(line);
+    if (m) { start = Math.max(0, parseFloat(m[1])); continue; }
+    m = /silence_end:\s*(-?\d+(?:\.\d+)?)/.exec(line);
+    if (m && start != null) { out.push([+start.toFixed(2), +parseFloat(m[1]).toFixed(2)]); start = null; }
+  }
+  if (start != null) out.push([+start.toFixed(2), dur ? +dur.toFixed(2) : +start.toFixed(2)]);   // silence that runs to the end
+  return { dur: +dur.toFixed(2), silences: out.filter(([a, b]) => b - a >= 0.9) };
+}
+function runSilenceDetect(file) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(FFMPEG, ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', 'silencedetect=noise=-50dB:d=1.0', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} reject(new Error('silence analysis timed out')); }, 30000);
+    p.stderr.on('data', d => { err += d; if (err.length > 600000) err = err.slice(-300000); });
+    p.on('error', e => { clearTimeout(t); if (e.code === 'ENOENT') silenceMissing = true; reject(e); });
+    p.on('close', code => { clearTimeout(t); code === 0 || /Duration:/.test(err) ? resolve(parseSilence(err)) : reject(new Error('ffmpeg exited ' + code)); });
+  });
+}
+function rememberSilence(key, value) {
+  silenceCache[key] = { v: SILENCE_VER, at: Date.now(), ...value };
+  const keys = Object.keys(silenceCache);
+  if (keys.length > SILENCE_MAX) for (const k of keys.sort((a, b) => (silenceCache[a].at || 0) - (silenceCache[b].at || 0)).slice(0, keys.length - SILENCE_MAX)) delete silenceCache[k];
+  if (!silenceDirty) { silenceDirty = true; setTimeout(() => { silenceDirty = false; try { writeJSON(SILENCE_FILE, silenceCache); } catch {} }, 4000).unref?.(); }
+}
+/* key: cache key. file: absolute path of a finished audio file. */
+function silenceFor(key, file) {
+  const hit = silenceCache[key];
+  if (hit && hit.v === SILENCE_VER) return Promise.resolve(hit);
+  if (silenceBusy.has(key)) return silenceBusy.get(key);
+  const job = (silenceChain = silenceChain.catch(() => {}).then(() => runSilenceDetect(file)).then(r => { rememberSilence(key, r); return silenceCache[key]; }))
+    .finally(() => silenceBusy.delete(key));
+  silenceBusy.set(key, job);
+  return job;
+}
+async function silenceEndpoint(id) {
+  const hit = silenceCache[id];
+  if (hit && hit.v === SILENCE_VER) return { ready: true, dur: hit.dur, silences: hit.silences };
+  if (silenceMissing) return { ready: false, unavailable: true };
+  const file = !downloadJobs.has(id) && findAudioFile(id);
+  if (!file) return { ready: false, pending: true };
+  try { const r = await silenceFor(id, file); return { ready: true, dur: r.dur, silences: r.silences }; }
+  catch (e) { return silenceMissing ? { ready: false, unavailable: true } : { ready: false, pending: true, error: String(e.message || e).slice(0, 120) }; }
+}
+async function silenceLocal(localId) {
+  const key = 'local:' + localId;
+  const hit = silenceCache[key];
+  if (hit && hit.v === SILENCE_VER) return { ready: true, dur: hit.dur, silences: hit.silences };
+  if (silenceMissing) return { ready: false, unavailable: true };
+  const entry = Object.entries(localIndex).find(([, e]) => e && e.track && e.track.localId === localId);
+  if (!entry) return { ready: false, unavailable: true };
+  try { const r = await silenceFor(key, path.join(LOCAL_DIR, entry[0])); return { ready: true, dur: r.dur, silences: r.silences }; }
+  catch { return silenceMissing ? { ready: false, unavailable: true } : { ready: false, pending: true }; }
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -1035,7 +1118,10 @@ function startDownload(id) {
       job.done = true;
       job.total = Math.max(job.total, fileSize(job.file));
       console.log(`[dl] ${id} done code=${code} bytes=${fileSize(job.file)}`);
-      if (!job.error) setTimeout(pruneCache, 50).unref?.();
+      if (!job.error) {
+        setTimeout(pruneCache, 50).unref?.();
+        setTimeout(() => { if (!silenceMissing) silenceFor(id, job.file).catch(() => {}); }, 400).unref?.();
+      }
       return;
     }
 
@@ -1391,7 +1477,7 @@ async function sp(p){
   if(!r.ok){let m='';try{m=(await r.json()).error.message;}catch{}throw httpErr(r.status,m||`Spotify error ${r.status}`);}
   return r.json();
 }
-const spTrack=t=>(t&&t.id&&!t.is_local&&t.type!=='episode')?{spId:t.id,title:t.name,artist:(t.artists||[]).map(a=>a.name).join(', '),album:t.album&&t.album.name||'',duration:Math.round((t.duration_ms||0)/1000),art:t.album&&t.album.images&&(t.album.images[1]||t.album.images[0]||{}).url||null}:null;
+const spTrack=t=>(t&&t.id&&!t.is_local&&t.type!=='episode')?{spId:t.id,title:t.name,artist:(t.artists||[]).map(a=>a.name).join(', '),album:t.album&&t.album.name||'',duration:Math.round((t.duration_ms||0)/1000),art:t.album&&t.album.images&&(t.album.images[1]||t.album.images[0]||{}).url||null,spArt:t.album&&t.album.images&&(t.album.images[1]||t.album.images[0]||{}).url||null}:null;
 async function paged(first,pick){
   const out=[];let next=first,pages=0;
   while(next&&pages++<60){const pg=await sp(next);out.push(...pg.items.map(pick).filter(Boolean));next=pg.next;}
@@ -1860,6 +1946,62 @@ const syncSend = (res, code, value) => {
   });
   res.end(JSON.stringify(value));
 };
+
+/* ── Cross-device control: devices report what they play and poll for commands through the host ── */
+const syncDevices = new Map();
+function syncNowHandle(b) {
+  b = b && typeof b === 'object' ? b : {};
+  const id = syncText(b.id, 40).replace(/[^\w-]/g, ''); if (!id) return { ok: false, devices: [], cmds: [] };
+  const d = syncDevices.get(id) || { id, cmds: [] };
+  d.name = syncText(b.name, 60) || 'Device'; d.at = Date.now();
+  if (b.np && typeof b.np === 'object') d.np = { title: syncText(b.np.title, 140), artist: syncText(b.np.artist, 140), art: /^https?:\/\//.test(b.np.art || '') ? syncText(b.np.art, 500) : '', playing: !!b.np.playing, pos: syncNum(b.np.pos), dur: syncNum(b.np.dur) };
+  else if (b.np === null) d.np = null;
+  syncDevices.set(id, d);
+  const c = b.cmd;
+  if (c && typeof c === 'object' && ['play', 'pause', 'toggle', 'next', 'prev', 'seek', 'like'].includes(c.cmd)) {
+    const t = syncDevices.get(syncText(c.to, 40));
+    if (t && t.cmds.length < 20) t.cmds.push({ cmd: c.cmd, arg: +c.arg || 0, from: id });
+  }
+  const cmds = d.cmds.splice(0);
+  for (const [k, v] of syncDevices) if (Date.now() - v.at > 45000) syncDevices.delete(k);
+  return { ok: true, cmds, devices: [...syncDevices.values()].filter(x => x.id !== id).map(({ id, name, np, at }) => ({ id, name, np, at })) };
+}
+
+/* ── Sync folder: each device writes its own file into a shared folder (Dropbox, Syncthing, iCloud...)
+   and merges the others. Works while the other devices are switched off. ── */
+let folderCfg = readJSON('syncfolder.json', { dir: '' }), folderErr = '', folderRev = 0, folderT = 0, folderSeen = {};
+const folderMe = () => 'wavelength-library-' + os.hostname().replace(/[^\w.-]/g, '_').slice(0, 40) + '.json';
+function folderFiles() {
+  if (!folderCfg.dir) return [];
+  try { return fs.readdirSync(folderCfg.dir).filter(f => /^wavelength-library-.+\.json$/.test(f)).map(f => ({ f, m: fs.statSync(path.join(folderCfg.dir, f)).mtimeMs })); } catch { return []; }
+}
+function folderWrite() {
+  if (!folderCfg.dir) return;
+  clearTimeout(folderT);
+  folderT = setTimeout(() => {
+    try {
+      const f = path.join(folderCfg.dir, folderMe()), tmp = f + '.' + process.pid + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify({ v: 1, device: os.hostname(), at: Date.now(), library: readSyncLibrary() }));
+      fs.renameSync(tmp, f); folderSeen[folderMe()] = fs.statSync(f).mtimeMs; folderErr = '';
+    } catch (e) { folderErr = 'Could not write to the folder: ' + e.message; }
+  }, 1500);
+}
+function folderMerge(force) {
+  const others = folderFiles().filter(x => x.f !== folderMe() && (force || folderSeen[x.f] !== x.m));
+  if (!others.length) return { merged: 0 };
+  const libs = [];
+  for (const x of others) {
+    try { const j = JSON.parse(fs.readFileSync(path.join(folderCfg.dir, x.f), 'utf8')); libs.push(cleanSyncLibrary(j.library || j)); folderSeen[x.f] = x.m; } catch {}
+  }
+  if (!libs.length) return { merged: 0 };
+  applySyncLibrary(mergeLibraries(readSyncLibrary(), libs));
+  folderRev++; folderWrite();
+  return { merged: libs.length };
+}
+const folderStatus = () => ({ dir: folderCfg.dir, rev: folderRev, error: folderErr, files: folderFiles().map(x => ({ name: x.f.slice(19, -5), at: Math.round(x.m), me: x.f === folderMe() })) });
+setInterval(() => { try { if (folderCfg.dir) folderMerge(false); } catch (e) { folderErr = e.message; } }, 60000).unref();
+setTimeout(() => { try { if (folderCfg.dir) folderMerge(false); } catch {} }, 4000).unref();
+
 async function syncHostRequest(req, res) {
   const u = new URL(req.url || '/', 'http://sync');
   if (req.method === 'OPTIONS') return syncSend(res, 204, {});
@@ -1880,6 +2022,12 @@ async function syncHostRequest(req, res) {
       ok: true, role: 'guest', sources: [syncText(incoming.device, 80) || 'Device'],
       ...previewMerge(readSyncLibrary(), [lib], readMergeBase()),
     });
+  }
+  if (u.pathname === '/api/sync/now') {
+    if (req.method !== 'POST') return syncSend(res, 405, { error: 'Method not allowed' });
+    if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
+    let b = {}; try { b = JSON.parse((await body(req, 2e5)).toString() || '{}'); } catch {}
+    return syncSend(res, 200, syncNowHandle(b));
   }
   if (u.pathname !== '/api/sync/library') return syncSend(res, 404, { error: 'Not found' });
   if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
@@ -2229,9 +2377,29 @@ async function api(req,res,u,p){
 
   if(p==='/api/state'){
     if(m==='GET') return json(res,readJSON('state.json',null));
-    if(m==='PUT'){writeJSON('state.json',await parse(25e6));return json(res,{ok:true});}
+    if(m==='PUT'){writeJSON('state.json',await parse(25e6));folderWrite();return json(res,{ok:true});}
   }
 
+  if(m==='POST'&&p==='/api/discord'){try{return json(res,await require('./discord-rpc').update(await parse(1e5)));}catch(e){return json(res,{connected:false});}}
+  if(m==='POST'&&p==='/api/sync/remote'){
+    const b=await parse(2e5);
+    if(sync.role==='host') return json(res,syncNowHandle(b));
+    if(sync.role==='guest'&&sync.hostUrl) return json(res,await syncRemote(sync.hostUrl,sync.code,'/api/sync/now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)},6000));
+    return json(res,{ok:false,devices:[],cmds:[]});
+  }
+  if(p==='/api/sync/folder'){
+    if(m==='GET') return json(res,folderStatus());
+    if(m==='POST'){
+      const b=await parse(1e4),dir=String(b.dir||'').trim();
+      if(!dir){folderCfg={dir:''};writeJSON('syncfolder.json',folderCfg);folderErr='';return json(res,folderStatus());}
+      let st;try{st=fs.statSync(dir);}catch{throw httpErr(400,'That folder does not exist');}
+      if(!st.isDirectory()) throw httpErr(400,'That path is not a folder');
+      try{fs.accessSync(dir,fs.constants.W_OK);}catch{throw httpErr(400,'Wavelength cannot write to that folder');}
+      folderCfg={dir};writeJSON('syncfolder.json',folderCfg);folderMerge(true);folderWrite();
+      return json(res,folderStatus());
+    }
+  }
+  if(m==='POST'&&p==='/api/sync/folder/merge'){const r=folderMerge(true);folderWrite();return json(res,{...folderStatus(),...r});}
   if(m==='GET'&&p==='/api/sync/status') return json(res,syncStatus());
   if(m==='GET'&&p==='/api/sync/find') return json(res,{hosts:await probeSyncHosts(), discoveryPort:SYNC_DISCOVERY_PORT, port:SYNC_PORT});
   if(m==='POST'&&p==='/api/sync/host') return json(res,await startSyncHost());
@@ -2282,6 +2450,8 @@ async function api(req,res,u,p){
     return json(res,noAiFilter(await related(g[1]),noAi));
   }
   if(m==='GET'&&(g=p.match(/^\/api\/info\/([A-Za-z0-9_-]{11})$/))) return json(res,await videoInfo(g[1]));
+  if(m==='GET'&&(g=p.match(/^\/api\/silence\/([A-Za-z0-9_-]{11})$/))) return json(res,await silenceEndpoint(g[1]));
+  if(m==='GET'&&(g=p.match(/^\/api\/silence\/local\/([A-Za-z0-9_-]{1,64})$/))) return json(res,await silenceLocal(g[1]));
   if(m==='GET'&&(g=p.match(/^\/api\/ready\/([A-Za-z0-9_-]{11})$/))) {
     const cached=cachedAudio(g[1]);
     if(cached){ const st=fs.statSync(cached); return json(res,{ok:true,cached:true,size:st.size,mime:AUDIO_MIME[path.extname(cached).toLowerCase()]||'audio/mp4'}); }

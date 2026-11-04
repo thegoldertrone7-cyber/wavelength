@@ -14,7 +14,8 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="css/style.css">
-<script>try{var s=JSON.parse(localStorage.getItem('wl')||'{}');if(s.theme)document.documentElement.dataset.theme=s.theme;if(s.style)document.documentElement.dataset.style=s.style;if(s.accent)document.documentElement.style.setProperty('--accent',s.accent);if(s.read)document.documentElement.dataset.read=s.read;if(s.contrast)document.documentElement.dataset.contrast='high';if(s.motion)document.documentElement.dataset.motion=s.motion}catch(e){}</script>
+<link rel="stylesheet" href="css/themes.css">
+<script>try{var s=JSON.parse(localStorage.getItem('wl')||'{}');if(s.theme)document.documentElement.dataset.theme=s.theme;if(s.style)document.documentElement.dataset.style=s.style;if(s.accent)document.documentElement.style.setProperty('--accent',s.accent);if(s.read)document.documentElement.dataset.read=s.read;if(s.contrast)document.documentElement.dataset.contrast='high';if(s.motion)document.documentElement.dataset.motion=s.motion;if(s.nav)document.documentElement.dataset.nav=s.nav;if(s.dock)document.documentElement.dataset.dock=s.dock;if(s.cw)document.documentElement.dataset.cw=s.cw;if(s.sb)document.documentElement.dataset.sb=s.sb;}catch(e){}</script>
 </head>
 <body>
 <div class="ambient"><i></i><i></i></div>
@@ -23,13 +24,13 @@
   <aside class="side card">
     <div class="logo"><span class="logo-dots"><i></i><i></i><i></i><i></i></span>Wavelength</div>
     <nav class="nav">
-      <a href="#home" data-go="home" data-r="home"><span data-ic="home"></span>Home</a>
-      <a href="#search" data-go="search" data-r="search"><span data-ic="search"></span>Search</a>
-      <a href="#library" data-go="library" data-r="library"><span data-ic="lib"></span>Library</a>
-      <a href="#recap" data-go="recap" data-r="recap"><span data-ic="chart"></span>Recap</a>
-      <a href="#import" data-go="import" data-r="import"><span data-ic="import"></span>Spotify import</a>
-      <a href="#downloads" data-go="downloads" data-r="downloads"><span data-ic="dl"></span>Downloads</a>
-      <a href="#settings" data-go="settings" data-r="settings"><span data-ic="gear"></span>Settings</a>
+      <a href="#home" data-go="home" data-r="home" title="Home"><span data-ic="home"></span>Home</a>
+      <a href="#search" data-go="search" data-r="search" title="Search"><span data-ic="search"></span>Search</a>
+      <a href="#library" data-go="library" data-r="library" title="Library"><span data-ic="lib"></span>Library</a>
+      <a href="#recap" data-go="recap" data-r="recap" title="Recap"><span data-ic="chart"></span>Recap</a>
+      <a href="#import" data-go="import" data-r="import" title="Spotify import"><span data-ic="import"></span>Spotify import</a>
+      <a href="#downloads" data-go="downloads" data-r="downloads" title="Downloads"><span data-ic="dl"></span>Downloads</a>
+      <a href="#settings" data-go="settings" data-r="settings" title="Settings"><span data-ic="gear"></span>Settings</a>
     </nav>
     <div class="side-h"><span>Playlists</span><button class="ib sm" data-act="newpl" data-ic="plus" title="New playlist"></button></div>
     <div class="side-pl" id="side-pl"></div>
@@ -74,6 +75,7 @@
   <button class="ib x" data-act="np" data-ic="close" title="Close"></button>
   <div class="np-art" id="np-art"></div>
   <div class="np-meta"><h2 id="np-title">Nothing playing</h2><p id="np-artist"></p><button class="ib np-like" data-act="like" data-ic="heart" title="Like current song (L)" aria-label="Like current song"></button></div>
+  <div class="np-lyrics" id="np-lyrics" aria-live="polite"></div>
   <canvas id="viz"></canvas>
   <div class="prog wide"><span class="tm t-cur">0:00</span><div class="dtw" data-seek role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="dt"><i class="js-fill"></i></div></div><span class="tm t-tot">0:00</span></div>
   <div class="np-vol">
@@ -90,7 +92,7 @@
     <button class="ib lg" data-act="next" data-ic="next" title="Next"></button>
     <button class="ib" data-act="repeat" data-ic="repeat" title="Repeat"></button>
   </div>
-  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="viz-full" id="b-viz-full">Full screen</button><button class="btn" data-act="queue">Queue</button><button class="btn" data-act="sleep-menu" id="b-sleep">Sleep</button><button class="btn" data-act="speed-menu" id="b-speed" title="Playback speed ( [ and ] )">1×</button><button class="btn" data-act="edit-song" id="b-edit" title="Edit title, artist and image (E)">Edit</button></div>
+  <div class="acts"><button class="btn" data-act="viz-style" id="b-viz">Matrix</button><button class="btn" data-act="viz-full" id="b-viz-full">Full screen</button><button class="btn" data-act="queue">Queue</button><button class="btn" data-act="sleep-menu" id="b-sleep">Sleep</button><button class="btn" data-act="speed-menu" id="b-speed" title="Playback speed ( [ and ] )">1×</button><button class="btn" data-act="lyrics" id="b-lyr" title="Lyrics (Y)">Lyrics</button><button class="btn" data-act="edit-song" id="b-edit" title="Edit title, artist and image (E)">Edit</button></div>
 </section>
 
 <aside class="queue card" id="queue">
@@ -103,8 +105,10 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <audio id="audio" preload="auto"></audio>
 <audio id="audio-b" preload="auto" aria-hidden="true"></audio>
+<script src="js/themes.js"></script>
 <script src="js/viz.js"></script>
 <script src="js/motion.js"></script>
+<script src="js/skipper.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

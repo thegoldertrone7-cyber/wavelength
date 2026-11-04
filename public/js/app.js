@@ -32,8 +32,7 @@ const nativeLockAllowed = () => {
 function syncSystemBars() {
   if (!NATIVE) return;
   const theme = S.settings.theme;
-  const light = theme === 'light' || theme === 'latte'
-    || (theme === 'auto' && typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: light)').matches);
+  const light = themeMode() === 'light';
   try { window.AndroidBridge.setLightSystemBars(!!light); } catch {}
 }
 let nativeSeq = 0;
@@ -164,9 +163,146 @@ function rememberSearch(q) {
 }
 
 /* ═════════ state ═════════ */
-const DEF = { playlists: [], liked: [], history: [], overrides: {}, listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, headphonesPause: true, plSort: 'added', plView: 'list', swipeRows: true, speed: 1 } };
+const DEF = { playlists: [], liked: [], history: [], overrides: {}, listening: { v: 1, devices: {} }, settings: { theme: 'dark', style: 'nothing', accent: null, viz: true, vizStyle: 'matrix', vizSize: 'md', vizSizePrev: 'md', lockVisualizer: true, autoplay: true, gapless: true, resume: true, motion: 'system', readSize: 'default', contrast: false, sleepUntil: 0, quality: 192, streamQuality: 'best', volume: 0.8, smartVolume: false, noAi: false, blockedArtists: [], skipCredits: false, skipIntro: 'off', skipOutro: 'off', skipBreaks: 'off', skipSure: 'balanced', skipCrowd: true, skipSilence: true, skipMemory: {}, scrollbar: 'pill', navPos: 'left', dockPos: 'bottom', contentWidth: 'full', dotBg: false, dotOpacity: 22, dotScale: 22, customCss: '', syncOnOpen: false, syncDaily: false, syncControl: false, syncLast: 0, lockLayout: 'art', lockTheme: 'accent', lockControls: true, lockHide: 9, lockHint: true, pinned: [], perf: 'auto', realViz: false, off: [], setupDone: false, vizHidden: [], discord: false, discordId: '', lyrics: true, headphonesPause: true, plSort: 'added', plView: 'list', swipeRows: true, speed: 1 } };
+
+/* ── Pinned playlists: quick access in the sidebar, on Home, with Alt+1..9 and Android launcher shortcuts ── */
+const pinnedPls = () => (Array.isArray(S.settings.pinned) ? S.settings.pinned : []).map(id => S.playlists.find(p => p.id === id)).filter(Boolean);
+const isPinned = id => (S.settings.pinned || []).includes(id);
+function togglePin(id) {
+  const a = Array.isArray(S.settings.pinned) ? S.settings.pinned.filter(x => S.playlists.some(p => p.id === x)) : [];
+  const i = a.indexOf(id);
+  if (i >= 0) a.splice(i, 1); else { if (a.length >= 9) return toast('You can pin up to 9 playlists'); a.push(id); }
+  S.settings.pinned = a; save(); drawSide(); syncShortcuts();
+  if (curRoute === 'home' || curRoute === 'playlist') draw();
+  toast(i >= 0 ? 'Unpinned' : 'Pinned for quick access');
+}
+function syncShortcuts() {
+  if (!NATIVE) return;
+  try { window.AndroidBridge.setShortcuts(JSON.stringify(pinnedPls().slice(0, 3).map(p => ({ id: p.id, name: p.name })))); } catch {}
+}
+document.addEventListener('keydown', e => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || !/^[1-9]$/.test(e.key) || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '')) return;
+  const p = pinnedPls()[+e.key - 1]; if (p) { e.preventDefault(); location.hash = '#playlist/' + p.id; }
+});
+
+/* ── Automatic sync, cross-device control and the sync folder ── */
+const tgl = (k, l, sub) => `<div class="line"><div><div class="l">${l}</div><div class="s">${sub}</div></div><button class="tg${S.settings[k] ? ' on' : ''}" data-act="tg" data-k="${k}" aria-label="${l}"></button></div>`;
+const DEVICE_ID = (() => { try { let v = localStorage.getItem('wl-device'); if (!v) { v = Math.random().toString(36).slice(2, 10) + Date.now().toString(36); localStorage.setItem('wl-device', v); } return v; } catch { return 'dev' + Math.random().toString(36).slice(2, 8); } })();
+const remoteDeviceName = () => NATIVE ? 'Android phone' : /Mac/.test(navigator.platform) ? 'Mac' : /Win/.test(navigator.platform) ? 'Windows PC' : 'Linux PC';
+let remoteBusy = false;
+async function autoSync() {
+  if (!R.sync || R.sync.role !== 'guest' || R.autoSyncing) return;
+  R.autoSyncing = true;
+  try {
+    await api('/api/sync/merge', { method: 'POST', json: {} });
+    await refreshLibraryState();
+    R.sync = await api('/api/sync/status');
+    S.settings.syncLast = Date.now(); save(); syncPaint();
+  } catch {}
+  R.autoSyncing = false;
+}
+function syncAutoCheck(opening) {
+  if (!R.sync || R.sync.role !== 'guest') return;
+  if (opening && S.settings.syncOnOpen) return autoSync();
+  if (S.settings.syncDaily && Date.now() - (+S.settings.syncLast || 0) > 864e5) return autoSync();
+}
+setInterval(() => syncAutoCheck(false), 36e5);
+const npSnapshot = () => R.cur ? { title: R.cur.title || '', artist: R.cur.artist || '', art: /^https?:/.test(R.cur.art || '') ? R.cur.art : '', playing: !!R.playing, pos: Math.round(audio.currentTime || 0), dur: Math.round(isFinite(audio.duration) ? audio.duration : (R.cur.duration || 0)) } : null;
+async function remoteTick(cmd) {
+  if (remoteBusy || !R.sync || R.sync.role === 'off') return;
+  remoteBusy = true;
+  try {
+    const body = { id: DEVICE_ID, name: remoteDeviceName(), np: npSnapshot() }; if (cmd) body.cmd = cmd;
+    const r = await api('/api/sync/remote', { method: 'POST', json: body });
+    R.devices = (r && r.devices) || [];
+    for (const c of (r && r.cmds) || []) runRemoteCmd(c);
+  } catch { R.devices = []; }
+  remoteBusy = false; paintDevices();
+}
+function runRemoteCmd(c) {
+  if (c.cmd === 'toggle') togglePlay();
+  else if (c.cmd === 'play') { if (audio.paused) togglePlay(); }
+  else if (c.cmd === 'pause') { if (!audio.paused) togglePlay(); }
+  else if (c.cmd === 'next') next();
+  else if (c.cmd === 'prev') prev();
+  else if (c.cmd === 'seek') audio.currentTime = Math.max(0, +c.arg || 0);
+  else if (c.cmd === 'like' && R.cur) toggleLike(R.cur);
+}
+setInterval(() => { if (S.settings.syncControl && !document.hidden) remoteTick(); }, 3000);
+function remoteHTML() {
+  if (!S.settings.syncControl) return '<p class="mut">Turn on “Control other devices” to see and control what your paired devices are playing.</p>';
+  if (!R.sync || R.sync.role === 'off') return '<p class="mut">Pair this device above first.</p>';
+  if (!R.devices.length) return '<p class="mut">No other device is online. Open Wavelength on another paired device.</p>';
+  return `<div class="remote-list">${R.devices.map(d => {
+    const n = d.np, on = n && n.playing;
+    return `<div class="remote-dev"><div class="rd-i"><b>${esc(d.name)}</b><span>${n ? `${esc(n.title)}${n.artist ? ' · ' + esc(n.artist) : ''}` : 'Nothing playing'} · ${n ? (on ? 'Playing' : 'Paused') : 'Idle'}</span></div>
+      <div class="rd-b"><button class="ib" data-act="remote" data-to="${esc(d.id)}" data-c="prev" aria-label="Previous">${I.prev}</button><button class="ib" data-act="remote" data-to="${esc(d.id)}" data-c="toggle" aria-label="Play or pause">${on ? I.pause || I.playS : I.playS}</button><button class="ib" data-act="remote" data-to="${esc(d.id)}" data-c="next" aria-label="Next">${I.next}</button></div></div>`;
+  }).join('')}</div>`;
+}
+function paintDevices() { const b = $('#remote-box'); if (b) b.innerHTML = remoteHTML(); }
+async function folderLoad() { if (NATIVE) return; try { R.folder = await api('/api/sync/folder'); } catch {} paintFolder(); }
+function folderHTML() {
+  const f = R.folder; if (!f) return '<p class="mut">Reading folder…</p>';
+  return `<div class="line"><div><div class="l">Shared folder</div><div class="s">${f.dir ? `<span class="mono-break">${esc(f.dir)}</span>` : 'Pick a folder that Dropbox, Syncthing, iCloud or OneDrive already shares between your devices. Each device writes its own file there and merges the others, so sync works even when the other device is off.'}</div>${f.error ? `<div class="sync-error">${esc(f.error)}</div>` : ''}</div>
+    <div class="inline" style="flex:1;justify-content:flex-end"><input class="inp" id="folder-dir" type="text" placeholder="/path/to/shared/folder" value="${esc(f.dir || '')}" aria-label="Sync folder path"><button class="btn" data-act="folder-set">${f.dir ? 'Change' : 'Use folder'}</button></div></div>
+    ${f.dir ? `<div class="line"><div><div class="l">${plural(f.files.length, 'device file')} in the folder</div><div class="s">${f.files.map(x => esc(x.name) + (x.me ? ' (this device)' : '')).join(', ') || 'None yet'}</div></div><div class="acts"><button class="btn" data-act="folder-merge">Merge now</button><button class="btn dng" data-act="folder-clear">Stop</button></div></div>` : ''}`;
+}
+function paintFolder() { const b = $('#folder-box'); if (b) b.innerHTML = folderHTML(); }
+function syncExtras() {
+  return `<div class="sync-groups">
+    <details class="sg" open><summary>Automatic sync</summary>
+      ${tgl('syncOnOpen', 'Sync when Wavelength opens', 'Merges with the host each time the app starts. Additive: nothing is removed.')}
+      ${tgl('syncDaily', 'Daily sync', `Merges once a day while the app is open. ${S.settings.syncLast ? 'Last automatic sync ' + esc(new Date(S.settings.syncLast).toLocaleString()) + '.' : 'Has not run yet.'}`)}
+      ${S.settings.syncOnOpen || S.settings.syncDaily ? '<p class="meta sync-note">Automatic sync only works while paired as a guest. Listening recap statistics are merged per device along with your library.</p>' : ''}
+    </details>
+    <details class="sg"><summary>Control other devices</summary>
+      ${tgl('syncControl', 'Control other devices', 'See what your paired devices are playing and send play, pause, next and previous. Devices report through the host while the app is open.')}
+      <div id="remote-box">${remoteHTML()}</div>
+    </details>
+    ${NATIVE ? '' : `<details class="sg"><summary>Sync folder · works with devices off</summary><div id="folder-box">${folderHTML()}</div></details>`}
+  </div>`;
+}
+
+/* ── Optional features ── Switching one off hides its controls and stops its work. */
+const FEATURES = [
+  ['viz', 'Visualizer', 'Animated visuals in the full-screen player.'],
+  ['lyrics', 'Lyrics', 'Synced lyrics from LRCLIB.'],
+  ['skipper', 'Intro and outro skipper', 'Skips intros, outros and spoken breaks.'],
+  ['recap', 'Listening recap', 'Stats by year, month or custom dates.'],
+  ['import', 'Spotify import', 'Bring in playlists, albums and song lists.'],
+  ['downloads', 'Downloads', 'MP3 downloads and local files.'],
+  ['editor', 'Song editor', 'Change a song’s title, artist and artwork.'],
+  ['sync', 'Device sync', 'Keep your library in step across devices.'],
+];
+const featOn = k => !(S.settings.off || []).includes(k);
+const FEAT_SETTING_MAP = { viz: ['viz', 'lockVisualizer', 'vizSize', 'viz-gallery', 'viz-vis'], lyrics: ['lyrics'], skipper: ['skipIntro', 'skipOutro', 'skipBreaks', 'skipSure', 'skipCrowd', 'skipSilence', 'skip-forget'], editor: [], downloads: ['quality'] };
+function hideOffSettings() {
+  if (!$('#set-playback')) return;
+  for (const [f, keys] of Object.entries(FEAT_SETTING_MAP)) {
+    const off = !featOn(f);
+    for (const k of keys) $$(`[data-k="${k}"],[data-set="${k}"],[data-act="${k}"]`).forEach(el => { const l = el.closest('.line'); if (l) l.hidden = off; });
+  }
+}
+function applyFeatures() {
+  const valid = new Set(FEATURES.map(f => f[0]));
+  S.settings.off = (Array.isArray(S.settings.off) ? S.settings.off : []).filter(k => valid.has(k));
+  document.documentElement.dataset.off = S.settings.off.join(' ');
+  if (!featOn('lyrics') && R.lyr && R.lyr.on) lyricsToggle(false);
+  if (!featOn('skipper')) { hideSkipChip(); R.skip = null; }
+  vizSync(); syncNativePrefs(); hideOffSettings();
+}
+let featDraft = new Set();
+function featureSetup() {
+  featDraft = new Set(S.settings.off || []);
+  modal(`<h2>Make Wavelength yours</h2><p class="mut">Choose what you want. Anything you switch off is hidden and stops running, which saves memory and battery. Bring it all back any time in Settings → Features.</p>
+    <div class="feat-list">${FEATURES.map(([k, n, d]) => `<button class="feat${featDraft.has(k) ? '' : ' on'}" data-act="feat-pick" data-k="${k}" aria-pressed="${!featDraft.has(k)}"><span class="feat-c"></span><span><b>${esc(n)}</b><small>${esc(d)}</small></span></button>`).join('')}</div>
+    <div class="acts end"><button class="btn" data-act="feat-all">Keep everything</button><button class="btn solid" data-act="feat-done">Continue</button></div>`, 'feat-sheet');
+}
+const vizHiddenList = () => Array.isArray(S.settings.vizHidden) ? S.settings.vizHidden.filter(i => WLViz.has(i)) : [];
+const vizVisible = () => WLViz.styles.filter(x => !vizHiddenList().includes(x.id));
 let S = structuredClone(DEF);
 const R = { queue: [], idx: -1, cur: null, playing: false, shuffle: false, shuffleOrder: [], shufflePos: -1, repeat: 0, muted: false, results: [], sTok: 0, health: null, stats: null, sp: undefined, dls: [], local: [], localReady: false, localLoading: false, localError: '', localFolder: '', seeking: false, sleepT: 0, sleepTick: 0, listPreviewT: 0, sync: null, playCtx: '', viewList: null, recapYear: new Date().getFullYear(), recapFrom: '', recapTo: '', infoCache: {}, credits: null, creditDone: '', listenTick: 0, normGain: 1, normReady: 0, remix: null };
+R.devices = []; R.folder = null;
 let saveT; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api('/api/state', { method: 'PUT', json: S }).catch(() => {}), 400); };
 let toastT;
 const toast = (m, undo) => {
@@ -489,12 +625,14 @@ let autoWatcher = false;
 function themeMode() {
   if (S.settings.theme === 'auto') return autoLight && autoLight.matches ? 'light' : 'dark';
   if (S.settings.theme === 'light' || S.settings.theme === 'latte') return 'light';
-  return 'dark';
+  const extra = WLThemes.byId[S.settings.theme];
+  return extra ? extra.mode : 'dark';
 }
 const paletteFor = () => CTP[S.settings.theme] || CTP[themeMode() === 'light' ? 'latte' : 'mocha'];
 const defAccent = () => {
   const ctp = CTP[S.settings.theme];
   if (ctp) return ctp.accents.mauve;
+  if (WLThemes.byId[S.settings.theme]) return WLThemes.byId[S.settings.theme].accent;
   return THEME_ACCENTS[S.settings.theme] || THEME_ACCENTS.dark;
 };
 const hexRgb = value => {
@@ -510,9 +648,241 @@ function cachePrefs() {
     localStorage.setItem('wl', JSON.stringify({
       ...old, theme: S.settings.theme, style: S.settings.style,
       accent: S.settings.accent || '', read: S.settings.readSize || 'default',
-      contrast: !!S.settings.contrast, motion: S.settings.motion || 'system'
+      contrast: !!S.settings.contrast, motion: S.settings.motion || 'system',
+      nav: S.settings.navPos || 'left', dock: S.settings.dockPos || 'bottom', cw: S.settings.contentWidth || 'full', sb: S.settings.scrollbar || 'pill'
     }));
   } catch {}
+}
+/* ═════════ layout ═════════
+   Where things sit. Sidebar position, player position and content width are
+   independent, so any combination works; the presets are just named combos.
+   Only wide windows are affected: phones keep their own layout. */
+const NAV_POS = [['left', 'Left'], ['right', 'Right'], ['top', 'Top bar'], ['rail', 'Slim rail'], ['none', 'Hidden']];
+const DOCK_POS = [['bottom', 'Bottom'], ['top', 'Top'], ['float', 'Floating']];
+const CONTENT_W = [['full', 'Full width'], ['centered', 'Centered']];
+const LAYOUT_PRESETS = [
+  { id: 'classic', name: 'Classic', nav: 'left', dock: 'bottom', cw: 'full', hint: 'Sidebar on the left, player along the bottom.' },
+  { id: 'mirror', name: 'Mirrored', nav: 'right', dock: 'bottom', cw: 'full', hint: 'Sidebar on the right. The queue opens on the left.' },
+  { id: 'topbar', name: 'Top bar', nav: 'top', dock: 'bottom', cw: 'full', hint: 'Navigation and playlists run across the top.' },
+  { id: 'rail', name: 'Slim rail', nav: 'rail', dock: 'bottom', cw: 'full', hint: 'Icons only, so the music gets the room.' },
+  { id: 'focus', name: 'Focus', nav: 'none', dock: 'bottom', cw: 'centered', hint: 'No sidebar. Navigate from the header, content centred.' },
+  { id: 'playertop', name: 'Player on top', nav: 'left', dock: 'top', cw: 'full', hint: 'Controls up top, within easy reach.' },
+  { id: 'float', name: 'Floating dock', nav: 'left', dock: 'float', cw: 'full', hint: 'A compact player floating over the content.' },
+  { id: 'minimal', name: 'Minimal', nav: 'rail', dock: 'float', cw: 'centered', hint: 'Slim rail, floating player, centred content.' },
+];
+const pick = (list, v, d) => list.some(x => x[0] === v) ? v : d;
+const layoutNow = () => ({
+  nav: pick(NAV_POS, S.settings.navPos, 'left'),
+  dock: pick(DOCK_POS, S.settings.dockPos, 'bottom'),
+  cw: pick(CONTENT_W, S.settings.contentWidth, 'full'),
+});
+function applyLayout() {
+  const L = layoutNow(), r = document.documentElement;
+  r.dataset.nav = L.nav; r.dataset.dock = L.dock; r.dataset.cw = L.cw;
+  // Highlights and sliding indicators measure the page, so measure again once it has moved.
+  requestAnimationFrame(() => requestAnimationFrame(() => dispatchEvent(new Event('resize'))));
+}
+const layoutLabel = () => {
+  const L = layoutNow(), hit = LAYOUT_PRESETS.find(p => p.nav === L.nav && p.dock === L.dock && p.cw === L.cw);
+  return hit ? hit.name : 'Custom';
+};
+/* A tiny drawing of a layout, used for every preview. */
+function layoutWire(nav, dock, cw) {
+  const W = 160, H = 100, m = 5, ph = 12, gap = 4;
+  let top = m, bot = H - m;
+  const player = dock === 'top' ? { x: m, y: m, w: W - 2 * m, h: ph }
+    : dock === 'float' ? { x: 38, y: H - m - ph, w: W - 76, h: ph }
+    : { x: m, y: H - m - ph, w: W - 2 * m, h: ph };
+  if (dock === 'top') top = m + ph + gap; else if (dock === 'bottom') bot = H - m - ph - gap;
+  const h = bot - top;
+  let side = null, mx = m, mw = W - 2 * m, my = top, mh = h;
+  if (nav === 'left') { side = { x: m, y: top, w: 34, h }; mx = m + 34 + gap; mw = W - 2 * m - 34 - gap; }
+  else if (nav === 'right') { side = { x: W - m - 34, y: top, w: 34, h }; mw = W - 2 * m - 34 - gap; }
+  else if (nav === 'rail') { side = { x: m, y: top, w: 12, h }; mx = m + 12 + gap; mw = W - 2 * m - 12 - gap; }
+  else if (nav === 'top') { side = { x: m, y: top, w: W - 2 * m, h: 13 }; my = top + 13 + gap; mh = h - 13 - gap; }
+  const r = (o, c, rx = 3) => `<rect class="${c}" x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" rx="${rx}"/>`;
+  let out = `<rect class="wf-win" x=".5" y=".5" width="${W - 1}" height="${H - 1}" rx="6"/>`;
+  if (side) {
+    out += r(side, 'wf-side');
+    if (nav === 'top') for (let i = 0; i < 5; i++) out += `<rect class="wf-ink" x="${side.x + 6 + i * 13}" y="${side.y + 5}" width="9" height="3" rx="1.5"/>`;
+    else if (nav === 'rail') for (let i = 0; i < 4; i++) out += `<circle class="wf-ink" cx="${side.x + 6}" cy="${side.y + 9 + i * 9}" r="2.2"/>`;
+    else for (let i = 0; i < 5; i++) out += `<rect class="wf-ink" x="${side.x + 5}" y="${side.y + 7 + i * 7}" width="${i < 3 ? 22 : 16}" height="3" rx="1.5"/>`;
+  }
+  out += r({ x: mx, y: my, w: mw, h: mh }, 'wf-main');
+  const cwid = cw === 'centered' ? mw * 0.56 : mw - 12, cx = mx + (mw - cwid) / 2;
+  if (nav === 'none') for (let i = 0; i < 4; i++) out += `<circle class="wf-ink" cx="${mx + mw - 8 - i * 6}" cy="${my + 6}" r="1.8"/>`;
+  out += `<rect class="wf-ink wf-dim" x="${cx}" y="${my + 5}" width="${cwid * 0.45}" height="3" rx="1.5"/>`;
+  for (let i = 0; i < 4; i++) out += `<rect class="wf-line" x="${cx}" y="${my + 14 + i * 7}" width="${cwid}" height="4" rx="2"/>`;
+  out += r(player, 'wf-play', 6);
+  out += `<circle class="wf-dot" cx="${player.x + player.w / 2}" cy="${player.y + ph / 2}" r="2.4"/>`;
+  return `<svg class="wire" viewBox="0 0 ${W} ${H}" aria-hidden="true">${out}</svg>`;
+}
+function layoutGallery() {
+  const L = layoutNow();
+  const seg = (key, list, cur, label) => `<div class="lay-seg"><span class="lay-lbl">${label}</span><div class="chips" role="group" aria-label="${label}">${list.map(([v, l]) => `<button class="chip${v === cur ? ' on' : ''}" data-act="layout-set" data-k="${key}" data-v="${v}" aria-pressed="${v === cur}">${l}</button>`).join('')}</div></div>`;
+  modal(`<div class="eyebrow">Layout</div><h3 class="imp-title">Arrange the app</h3>
+    <p class="mut">Pick a ready-made arrangement, or set each part yourself. It changes right away. Phones and narrow windows keep their own layout.</p>
+    <div class="lay-gal" id="lay-gal">${LAYOUT_PRESETS.map(p => `<button class="lay-card${p.nav === L.nav && p.dock === L.dock && p.cw === L.cw ? ' on' : ''}" data-act="layout-pick" data-id="${p.id}" aria-pressed="${p.nav === L.nav && p.dock === L.dock && p.cw === L.cw}">${layoutWire(p.nav, p.dock, p.cw)}<span class="lc-n">${esc(p.name)}</span><span class="lc-h">${esc(p.hint)}</span></button>`).join('')}</div>
+    <div class="lay-custom"><div class="lay-now"><span class="lay-lbl">Your layout</span><div id="lay-now">${layoutWire(L.nav, L.dock, L.cw)}</div></div>
+      <div class="lay-opts">${seg('navPos', NAV_POS, L.nav, 'Sidebar')}${seg('dockPos', DOCK_POS, L.dock, 'Player')}${seg('contentWidth', CONTENT_W, L.cw, 'Content')}</div></div>
+    <div class="acts end"><button class="btn" data-act="layout-reset">Reset to Classic</button><button class="btn solid" data-act="close-modal">Done</button></div>`, 'layout-sheet');
+}
+function layoutRefresh() {
+  const L = layoutNow();
+  $$('.lay-card').forEach(b => { const p = LAYOUT_PRESETS.find(x => x.id === b.dataset.id), on = p.nav === L.nav && p.dock === L.dock && p.cw === L.cw; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+  $$('.lay-seg .chip').forEach(c => { const key = c.dataset.k, cur = key === 'navPos' ? L.nav : key === 'dockPos' ? L.dock : L.cw, on = c.dataset.v === cur; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+  const now = $('#lay-now'); if (now) now.innerHTML = layoutWire(L.nav, L.dock, L.cw);
+  const name = $('#layout-name'); if (name) name.textContent = layoutLabel();
+}
+
+/* ═════════ lyrics ═════════
+   Looked up on demand from lrclib.net, a free lyrics database, only when the
+   lyrics view is opened. Time-synced lyrics follow the song and a tapped line
+   jumps to it; plain lyrics just scroll. */
+const LRC_TAG = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+function parseLrc(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const tags = [...raw.matchAll(LRC_TAG)]; if (!tags.length) continue;
+    const body = raw.replace(LRC_TAG, '').trim();
+    for (const m of tags) out.push({ t: (+m[1]) * 60 + (+m[2]) + (m[3] ? (+m[3]) / Math.pow(10, m[3].length) : 0), text: body });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+/* "Artist - Song (Official Video) [HD]" -> "Song" */
+function cleanSongTitle(title, artist) {
+  let t = String(title || '')
+    .replace(/[\(\[][^\)\]]*(official|video|audio|lyrics?|visuali[sz]er|remaster|hd|hq|4k|mv|clip|live|explicit)[^\)\]]*[\)\]]/gi, '')
+    .replace(/\s+(ft\.?|feat\.?|featuring)\s+.*$/i, '').replace(/\s{2,}/g, ' ').trim();
+  const a = normArtist(artist);
+  const m = /^(.+?)\s+[-–—]\s+(.+)$/.exec(t);
+  if (m && a && normArtist(m[1]).includes(a.split(',')[0])) t = m[2].trim();
+  return t || String(title || '');
+}
+R.lyrCache = new Map();
+async function lyricsFor(t) {
+  const key = uid(t);
+  if (R.lyrCache.has(key)) return R.lyrCache.get(key);
+  const title = cleanSongTitle(t.title, t.artist), artist = String(t.artist || '').replace(/\s*-\s*topic$/i, '').split(',')[0].trim();
+  const dur = Math.round((isFinite(audio.duration) && audio.duration && R.cur && uid(R.cur) === key ? audio.duration : +t.duration) || 0);
+  const get = async url => {
+    const ctl = new AbortController(), kill = setTimeout(() => ctl.abort(), 8000);
+    try { return await fetch(url, { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' }); } finally { clearTimeout(kill); }
+  };
+  const q = o => Object.entries(o).filter(([, v]) => v).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  let hit = null;
+  let r = await get('https://lrclib.net/api/get?' + q({ track_name: title, artist_name: artist, album_name: t.album, duration: dur }));
+  if (r.ok) hit = await r.json();
+  else if (r.status === 404) {
+    // Fall back to a search and take the closest match by length.
+    const sr = await get('https://lrclib.net/api/search?' + q({ track_name: title, artist_name: artist }));
+    if (sr.ok) {
+      const list = (await sr.json()).filter(x => x && (x.syncedLyrics || x.plainLyrics || x.instrumental));
+      list.sort((a, b) => Math.abs((a.duration || 0) - dur) - Math.abs((b.duration || 0) - dur));
+      if (list[0] && (!dur || Math.abs((list[0].duration || 0) - dur) <= 6)) hit = list[0];
+    }
+  } else throw new Error('status ' + r.status);
+  const res = hit ? { synced: parseLrc(hit.syncedLyrics), plain: String(hit.plainLyrics || '').trim(), instrumental: !!hit.instrumental } : { synced: [], plain: '', instrumental: false };
+  R.lyrCache.set(key, res);
+  if (R.lyrCache.size > 80) R.lyrCache.delete(R.lyrCache.keys().next().value);
+  return res;
+}
+R.lyr = { on: false, key: '', data: null, idx: -1, state: 'idle' };
+function lyricsToggle(force) {
+  const on = typeof force === 'boolean' ? force : !R.lyr.on;
+  if (on && (S.settings.lyrics === false || !featOn('lyrics'))) return toast('Lyrics are turned off in Settings');
+  R.lyr.on = on; $('#np').classList.toggle('lyr', on);
+  const b = $('#b-lyr'); if (b) b.classList.toggle('on', on);
+  if (on) lyricsLoad(); else lyricsStop();
+}
+async function lyricsLoad() {
+  const t = R.cur, box = $('#np-lyrics'); if (!box) return;
+  if (!t) { box.innerHTML = '<p class="lyr-msg">Play a song to see its lyrics.</p>'; return; }
+  const key = uid(t); R.lyr.key = key; R.lyr.idx = -1; R.lyr.data = null;
+  box.innerHTML = '<p class="lyr-msg"><span class="lyr-dots"><i></i><i></i><i></i></span>Finding lyrics…</p>';
+  try {
+    const d = await lyricsFor(t);
+    if (!R.lyr.on || R.lyr.key !== key) return;
+    R.lyr.data = d; lyricsRender(d, t);
+  } catch (e) {
+    if (R.lyr.key !== key) return;
+    box.innerHTML = `<p class="lyr-msg">Couldn’t reach the lyrics service.</p><button class="btn sm" data-act="lyr-retry">Try again</button>`;
+  }
+}
+function lyricsRender(d, t) {
+  const box = $('#np-lyrics'); if (!box) return;
+  if (d.instrumental) { box.innerHTML = '<p class="lyr-msg">Instrumental. No lyrics for this one.</p>'; return; }
+  if (d.synced.length) {
+    box.innerHTML = `<div class="lyr-scroll synced" id="lyr-scroll"><div class="lyr-pad"></div>${d.synced.map((l, i) => `<p class="ll" data-i="${i}" data-t="${l.t}">${l.text ? esc(l.text) : '♪'}</p>`).join('')}<div class="lyr-pad"></div></div><div class="lyr-src">Lyrics from LRCLIB · tap a line to jump</div>`;
+    lyricsSync(true); return;
+  }
+  if (d.plain) { box.innerHTML = `<div class="lyr-scroll" id="lyr-scroll"><div class="lyr-pad sm"></div>${d.plain.split(/\n{2,}/).map(par => `<p class="lp">${esc(par).replace(/\n/g, '<br>')}</p>`).join('')}<div class="lyr-pad sm"></div></div><div class="lyr-src">Lyrics from LRCLIB · not time-synced</div>`; return; }
+  box.innerHTML = `<p class="lyr-msg">No lyrics found for “${esc(t.title)}”.</p><p class="lyr-sub">They are matched by title, artist and length. Fixing the song’s title or artist can help.</p><button class="btn sm" data-act="edit-song">${I.edit}Edit song details</button>`;
+}
+/* Binary search for the line being sung at `pos` seconds. */
+function lyricsIndex(lines, pos) {
+  let lo = 0, hi = lines.length - 1, ans = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (lines[mid].t <= pos) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return ans;
+}
+function lyricsSync(force) {
+  const d = R.lyr.data; if (!R.lyr.on || !d || !d.synced.length) return;
+  const i = lyricsIndex(d.synced, (audio.currentTime || 0) + 0.12);
+  if (i === R.lyr.idx && !force) return;
+  R.lyr.idx = i;
+  const sc = $('#lyr-scroll'); if (!sc) return;
+  const prev = sc.querySelector('.ll.on'); if (prev) prev.classList.remove('on');
+  sc.querySelectorAll('.ll.past').forEach(n => n.classList.remove('past'));
+  const cur = i >= 0 ? sc.querySelector(`.ll[data-i="${i}"]`) : null;
+  if (cur) {
+    cur.classList.add('on');
+    for (let k = Math.max(0, i - 3); k < i; k++) { const n = sc.querySelector(`.ll[data-i="${k}"]`); if (n) n.classList.add('past'); }
+    const target = cur.offsetTop - sc.clientHeight / 2 + cur.offsetHeight / 2;
+    sc.scrollTo({ top: Math.max(0, target), behavior: force || motionReduced() ? 'auto' : 'smooth' });
+  }
+}
+function lyricsStop() { R.lyr.key = ''; R.lyr.data = null; }
+
+/* ═════════ dotted background and custom CSS ═════════ */
+function applyDots() {
+  const r = document.documentElement, on = !!S.settings.dotBg;
+  r.dataset.dots = on ? 'on' : 'off';
+  const op = Math.max(4, Math.min(60, +S.settings.dotOpacity || 22)), sc = Math.max(10, Math.min(44, +S.settings.dotScale || 22));
+  r.style.setProperty('--dbg-pct', op + '%'); r.style.setProperty('--dbg-size', sc + 'px');
+}
+/* Custom CSS is the person's own and stays on this device, but a stray @import
+   would reach out to another server, so those are dropped. */
+const cleanCss = css => String(css || '').replace(/@import[^;]*;?/gi, '').replace(/<\/?style[^>]*>/gi, '').slice(0, 20000);
+function applyCustomCss() {
+  let el = $('#wl-custom-css');
+  if (!el) { el = document.createElement('style'); el.id = 'wl-custom-css'; document.head.appendChild(el); }
+  el.textContent = cleanCss(S.settings.customCss);
+}
+const CSS_STARTER = `/* Wavelength custom CSS. Everything here is applied on top of your theme.
+   Change any colour token, or restyle anything you like. */
+:root {
+  /* --bg: #0b0b10;        page behind the panels */
+  /* --card: #14141c;      panels */
+  /* --card2: #1e1e2a;     raised rows and inputs */
+  /* --text: #f2f2f7;      main text */
+  /* --text2: #a0a0b0;     secondary text */
+  /* --text3: #62626f;     faint text */
+  /* --accent: #ff4d6d;    accent colour (also set in Settings) */
+  /* --line: rgba(255,255,255,.09);  borders */
+}
+
+/* Example: rounder panels */
+/* .main, .side, .player { border-radius: 40px; } */
+
+/* Tip: interface styles use specific selectors. If a rule does not take effect,
+   make yours stronger, for example  html[data-style] .ttl { ... }  */
+`;
+
+/* Scrollbars follow the rounded shape of the interface. */
+const SCROLLBARS = [['pill', 'Rounded (default)'], ['autohide', 'Rounded, only when hovering'], ['hidden', 'Hidden'], ['system', 'System default']];
+function applyScrollbar() {
+  const v = SCROLLBARS.some(x => x[0] === S.settings.scrollbar) ? S.settings.scrollbar : 'pill';
+  document.documentElement.dataset.sb = v;
 }
 function applyMotion() {
   const mode = S.settings.motion === 'reduced' ? 'reduced' : 'system';
@@ -531,12 +901,15 @@ function applyReading() {
 }
 function applyTheme() {
   const { theme, accent } = S.settings, root = document.documentElement;
-  root.dataset.theme = theme; root.dataset.style = S.settings.style || 'nothing';
+  root.dataset.theme = theme; root.dataset.style = S.settings.style || 'nothing'; root.dataset.mode = themeMode();
   const a = accent || defAccent();
   const rgb = hexRgb(a) || { r: 215, g: 25, b: 33 };
   root.style.setProperty('--accent', a);
   root.style.setProperty('--accent-rgb', `${rgb.r},${rgb.g},${rgb.b}`);
-  root.style.setProperty('--on-accent', (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000 > 150 ? '#000' : '#fff');
+  // Whichever of black or white reads better on the accent.
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const lum = 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b);
+  root.style.setProperty('--on-accent', (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) ? '#000' : '#fff');
   cachePrefs();
   VC.accent = a;
   VC.dim = getComputedStyle(root).getPropertyValue('--dot').trim() || VC.dim;
@@ -697,17 +1070,19 @@ async function songImage(file) {
   return c.toDataURL('image/jpeg', 0.82);
 }
 function editSong(t) {
+  if (!featOn('editor')) return toast('Song editor is switched off in Settings → Features');
   t = t || R.cur;
   if (!t) return toast('Play or pick a song first');
   const key = ovKey(t), e = S.overrides[key];
-  SE = { key, yt: t.ytId || '', title: t.title || '', artist: t.artist || '', art: t.art || '', up: [],
+  SE = { key, sp: t.spId || '', spArt: t.spArt || '', yt: t.ytId || '', title: t.title || '', artist: t.artist || '', art: t.art || '', up: [],
     orig: e ? { ...e.o } : { title: t.title || '', artist: t.artist || '', art: t.art || '' }, had: e ? { ...e } : null };
   const u = SE.art.startsWith('http') ? SE.art : '';
   modal(`<div class="eyebrow">Edit song</div><h3 class="imp-title">Song details</h3>
     <div class="se-top"><div class="se-art" id="se-art">${art({ art: SE.art })}</div>
       <div class="se-tools"><button class="btn sm" data-act="se-pick">${I.image}Upload image</button>
         <button class="btn sm" data-act="se-orig-art">Original image</button>
-        <button class="btn sm" data-act="se-no-art">No image</button></div></div>
+        <button class="btn sm" data-act="se-no-art">No image</button>
+        ${t.spId || t.spArt ? '<button class="btn sm" data-act="se-spotify">Spotify image</button>' : ''}</div></div>
     <label class="set-label" for="se-title">Title</label>
     <input class="inp" id="se-title" value="${esc(SE.title)}" autocomplete="off" maxlength="200">
     <label class="set-label" for="se-artist">Artist</label>
@@ -717,6 +1092,8 @@ function editSong(t) {
     <p class="mut se-note">Changes apply everywhere this song appears on this device${e ? '' : ', and you can restore the original any time'}.</p>
     <div class="acts end">${e ? '<button class="btn dng" data-act="se-reset">Restore original</button>' : ''}<button class="btn" data-act="close-modal">Cancel</button><button class="btn solid" data-act="se-save">Save</button></div>`, 'song-edit');
 }
+/* After a helper button, put the cursor back in the title so Enter confirms the edit. */
+const seFocus = () => { const t = $('#se-title'); if (t) { t.focus(); const n = t.value.length; try { t.setSelectionRange(n, n); } catch {} } };
 function sePreview() { const el = $('#se-art'); if (el && SE) el.innerHTML = art({ art: SE.art }); }
 function seSave() {
   if (!SE) return;
@@ -813,6 +1190,7 @@ function vHome() {
       ${R.cur && !R.playing ? `<button class="btn acc" data-act="resume">${I.playS}Resume</button>` : ''}
       ${S.liked.length ? `<button class="btn" data-act="playliked">${I.heartF}Play liked</button>` : ''}
       ${S.playlists.some(p => p.tracks.length) ? `<button class="btn" data-act="smartshuffle">${I.shuffle}Smart shuffle</button>` : ''}</div></div>
+    ${pinnedPls().length ? `<div class="sec"><h2>Pinned</h2></div><div class="grid">${pinnedPls().map((p, i) => plTile(p, i)).join('')}</div>` : ''}
     ${h.length ? `<div class="sec"><h2>Jump back in</h2></div><div class="grid">${h.map((t, i) => tile(art(t), t.title, t.artist, `data-act="playhist" data-i="${i}"`, i)).join('')}</div>` : ''}
     ${pls.length ? `<div class="sec"><h2>Your playlists</h2><a data-go="library">See all</a></div><div class="grid">${pls.map((p, i) => plTile(p, i)).join('')}</div>`
       : `<div class="sec"><h2>Start here</h2></div><div class="empty">No playlists yet. Import one from Spotify or create your own from the sidebar.</div>`}`;
@@ -921,7 +1299,7 @@ function vPlaylist(id) {
         <button class="btn" data-act="shufflepl" data-id="${id}">${I.shuffle}Shuffle</button>
         ${NATIVE ? '' : `<button class="btn" data-act="dlall" data-id="${id}">${I.dl}Download all</button>`}
         <button class="btn" data-act="plmore" data-id="${id}" aria-haspopup="menu">${I.more}More</button>
-        ${isL ? '' : `<button class="btn" data-act="editpl" data-id="${pl.id}">${I.image}Edit</button><button class="btn dng" data-act="delpl" data-id="${pl.id}">${I.trash}Delete</button>`}
+        ${isL ? '' : `<button class="btn${isPinned(pl.id) ? ' on' : ''}" data-act="pinpl" data-id="${pl.id}" aria-pressed="${isPinned(pl.id)}">${isPinned(pl.id) ? 'Unpin' : 'Pin'}</button><button class="btn" data-act="editpl" data-id="${pl.id}">${I.image}Edit</button><button class="btn dng" data-act="delpl" data-id="${pl.id}">${I.trash}Delete</button>`}
         ${un ? `<button class="btn" data-act="matchrest" data-id="${id}">Match ${un} remaining</button>` : ''}</div>
       <div class="matchbar${MQ.total ? ' on' : ''}" id="match-bar"><div class="lbl" id="match-lbl"></div><div class="dtw" style="pointer-events:none"><div class="dt"><i id="match-fill"></i></div></div></div>
     </div></div>
@@ -994,6 +1372,25 @@ const fmtDuration = sec => {
   return `${sec}s`;
 };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function recapBuckets(days, view, from, to, months) {
+  if (view === 'months') return months.map((v, i) => ({ v, label: MONTHS[i][0], title: MONTHS[i] }));
+  const end = new Date(to + 'T12:00:00'), start = new Date(from + 'T12:00:00');
+  if (isNaN(end) || isNaN(start)) return [];
+  if (view === 'days') {
+    const out = []; const cap = new Date(end); cap.setDate(cap.getDate() - 59);
+    for (let d = new Date(start > cap ? start : cap); d <= end; d.setDate(d.getDate() + 1)) { const k = isoDay(d); out.push({ v: +days[k] || 0, label: String(d.getDate()), title: k }); }
+    return out;
+  }
+  const out = []; const d = new Date(start); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  while (d <= end && out.length < 60) {
+    let v = 0; const w = new Date(d);
+    for (let i = 0; i < 7; i++, w.setDate(w.getDate() + 1)) { const k = isoDay(w); if (k >= from && k <= to) v += +days[k] || 0; }
+    out.push({ v, label: String(d.getDate()), title: 'Week of ' + isoDay(d) }); d.setDate(d.getDate() + 7);
+  }
+  return out;
+}
 function vRecap(arg) {
   const range = parseRecapRange(arg);
   const from = range.from, to = range.to;
@@ -1009,6 +1406,9 @@ function vRecap(arg) {
     if (m >= 0 && m < 12) months[m] += +sec || 0;
   }
   const peak = Math.max(1, ...months);
+  const view = ['days', 'weeks', 'months'].includes(R.recapView) ? R.recapView : (wholeYear ? 'months' : 'days');
+  const buckets = recapBuckets(r.days, view, from, to, months);
+  const bpeak = Math.max(1, ...buckets.map(b => b.v));
   const totalHours = r.seconds / 3600;
   const top = r.topTracks[0];
   const rank = (list, kind) => list.length ? `<div class="recap-list">${list.map((x, i) => `<div class="recap-row">
@@ -1039,8 +1439,9 @@ function vRecap(arg) {
       <div class="recap-stat"><small>Devices</small><b>${r.devices}</b><span>Merged by device</span></div>
     </div>
     ${top ? `<div class="recap-feature"><div class="recap-feature-art">${art({ art: top.art, title: top.title }, 'lg')}</div><div><div class="eyebrow">Most played song</div><h2>${esc(top.title)}</h2><p class="mut">${esc(top.artist || '')} · ${esc(fmtDuration(top.seconds))} · ${plural(top.plays, 'play')}</p></div></div>` : ''}
-    <div class="recap-months"><div class="sec"><h2>${wholeYear ? 'Across the year' : 'Across this range'}</h2><span class="meta">Listening time by month</span></div>
-      <div class="recap-chart">${months.map((v, i) => `<div class="rc-bar" title="${MONTHS[i]}: ${esc(fmtDuration(v))}"><i style="height:${Math.max(2, Math.round(v / peak * 100))}%"></i><span>${MONTHS[i][0]}</span></div>`).join('')}</div></div>
+    <div class="recap-months"><div class="sec"><h2>${wholeYear ? 'Across the year' : 'Across this range'}</h2><span class="meta">Listening time by ${view.slice(0, -1)}</span></div>
+      <div class="chips recap-views" role="group" aria-label="Chart detail">${[['days', 'Days'], ['weeks', 'Weeks'], ['months', 'Months']].map(([k, n]) => `<button class="chip${view === k ? ' on' : ''}" data-act="recap-view" data-v="${k}" aria-pressed="${view === k}">${n}</button>`).join('')}<span class="recap-sep"></span>${[['7', '7 days'], ['30', '30 days'], ['90', '90 days'], ['week', 'This week'], ['month', 'This month']].map(([k, n]) => `<button class="chip" data-act="recap-preset" data-n="${k}">${n}</button>`).join('')}</div>
+      <div class="recap-chart${view === 'days' ? ' dense' : ''}">${buckets.map(b => `<div class="rc-bar" title="${esc(b.title)}: ${esc(fmtDuration(b.v))}"><i style="height:${Math.max(2, Math.round(b.v / bpeak * 100))}%"></i><span>${esc(b.label)}</span></div>`).join('')}</div></div>
     <div class="recap-cols">
       <div><div class="sec"><h2>Top songs</h2><span class="meta">Per song</span></div>${rank(r.topTracks.slice(0, 8), 'track')}</div>
       <div><div class="sec"><h2>Top playlists</h2><span class="meta">Per playlist</span></div>${rank(r.topPlaylists, 'playlist')}</div>
@@ -1126,13 +1527,15 @@ const dlList = () => R.dls.length ? R.dls.map(j => `<div class="dl ${j.status}">
 const THEME_GROUPS = [
   { name: 'Essentials', items: [['dark', 'Dark', 'Black'], ['light', 'Light', 'Bright'], ['auto', 'System', 'Follows your Mac']] },
   { name: 'Color themes', items: [['rose', 'Rose', 'Pink'], ['amber', 'Amber', 'Warm gold'], ['teal', 'Teal', 'Green-blue'], ['sky', 'Sky', 'Bright blue'], ['violet', 'Violet', 'Purple'], ['lime', 'Lime', 'Green'], ['slate', 'Slate', 'Neutral']] },
-  { name: 'Catppuccin', items: [['latte', 'Latte', 'Light · Mauve'], ['frappe', 'Frappé', 'Dark · Mauve'], ['macchiato', 'Macchiato', 'Dark · Mauve'], ['mocha', 'Mocha', 'Dark · Mauve']] }
+  { name: 'Catppuccin', items: [['latte', 'Latte', 'Light · Mauve'], ['frappe', 'Frappé', 'Dark · Mauve'], ['macchiato', 'Macchiato', 'Dark · Mauve'], ['mocha', 'Mocha', 'Dark · Mauve']] },
+  ...WLThemes.groups.map(g => ({ name: g.name, items: g.items.map(t => [t.id, t.name, t.sub]) })),
 ];
 function themePreview(k) {
   if (k === 'dark') return { bg: '#000', card: '#171718', accent: THEME_ACCENTS.dark, text: '#f4f4f4' };
   if (k === 'light') return { bg: '#e6e6e8', card: '#ebebed', accent: THEME_ACCENTS.light, text: '#0e0e10' };
   if (k === 'auto') return { bg: 'linear-gradient(90deg,#181825 50%,#eff1f5 50%)', card: '#313244', accent: THEME_ACCENTS.dark, text: '#cdd6f4' };
   if (CTP[k]) return { bg: CTP[k].bg, card: CTP[k].surface, accent: CTP[k].accents.mauve, text: CTP[k].text };
+  const x = WLThemes.byId[k]; if (x) return { bg: x.bg, card: x.card2, accent: x.accent, text: x.text };
   return { bg: '#000', card: '#171718', accent: THEME_ACCENTS[k] || THEME_ACCENTS.dark, text: '#f4f4f4' };
 }
 function themeCard(k, label, sub) {
@@ -1391,6 +1794,7 @@ async function syncLoad(force = false) {
 function syncPoll() {
   setTimeout(async () => {
     try {
+      if (!NATIVE) { const f = await api('/api/sync/folder'); if (R.folder && f.rev !== R.folder.rev) { R.folder = f; await refreshLibraryState(); toast('Library updated from the sync folder'); } else R.folder = f; paintFolder(); }
       if (R.sync && R.sync.role === 'host') {
         const next = await api('/api/sync/status');
         if (next && next.rev !== R.sync.rev) {
@@ -1456,7 +1860,7 @@ function vSet() {
     </div>
     <div class="set-find rise" style="--i:1">${I.search}<input id="set-find" type="search" placeholder="Find a setting — theme, audio, sync…" autocomplete="off" aria-label="Find a setting"><button class="set-find-clear" data-act="set-clear" title="Clear filter" aria-label="Clear filter">${I.close}</button></div>
     <nav class="set-jump rise" aria-label="Settings sections">
-      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-filters">Filters</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button><button data-scroll="set-status">Status</button>
+      <button data-scroll="set-appearance">Appearance</button><button data-scroll="set-reading">Reading</button><button data-scroll="set-feel">Motion</button><button data-scroll="set-playback">Playback</button><button data-scroll="set-filters">Filters</button><button data-scroll="set-sync">Devices</button><button data-scroll="set-storage">Storage</button><button data-scroll="set-import">Spotify</button>${NATIVE ? '<button data-scroll="set-lock">Lock screen</button>' : ''}<button data-scroll="set-features">Features</button><button data-scroll="set-status">Status</button>
     </nav>
     <div id="set-empty" class="empty set-empty" hidden>No setting matches that search.</div><div class="set">
     <div class="box rise" style="--i:0" id="set-appearance"><h2>Appearance</h2><p class="mut">Choose a palette, then tune the accent. Interface styles are layered on top without changing your colors.</p>
@@ -1474,11 +1878,22 @@ function vSet() {
       <div class="read-demo"><b>Readable by default</b><span>Artist names, labels and small print get extra breathing room at larger sizes.</span></div></div>
     <div class="box rise" style="--i:2" id="set-feel"><h2>Motion &amp; sound</h2><p class="mut">Keep movement fluid without leaving effects running in the background.</p>
       <div class="line"><div><div class="l">Motion</div><div class="s">Reduce transitions and visual movement across the app.</div></div><select class="inp" data-set="motion" aria-label="Motion preference"><option value="system"${s.motion === 'reduced' ? '' : ' selected'}>Match system</option><option value="reduced"${s.motion === 'reduced' ? ' selected' : ''}>Reduced</option></select></div>
+      ${tg('dotBg', 'Dotted background', 'A fine dot grid behind everything, in the style of the rest of the app.')}
+      <div class="line sl"><div><div class="l">Dot opacity</div><div class="s">How visible the dots are. <b id="dotOpacity-v">${s.dotOpacity || 22}%</b></div></div><input class="range" type="range" min="4" max="60" step="1" value="${s.dotOpacity || 22}" data-dots="dotOpacity" aria-label="Dot opacity"></div>
+      <div class="line sl"><div><div class="l">Dot spacing</div><div class="s">Distance between dots. <b id="dotScale-v">${s.dotScale || 22} px</b></div></div><input class="range" type="range" min="10" max="44" step="1" value="${s.dotScale || 22}" data-dots="dotScale" aria-label="Dot spacing"></div>
+      <div class="line"><div><div class="l">Layout</div><div class="s">Where the sidebar, player and content sit. Currently <b id="layout-name">${layoutLabel()}</b>.</div></div><button class="btn" data-act="layout-gallery">Change layout</button></div>
+      <div class="line csswrap"><div><div class="l">Custom CSS</div><div class="s">Your own styles, applied on top of the theme and kept on this device. Start from the template to see every colour token you can change.</div>
+        <textarea class="inp css-box" id="custom-css" rows="7" spellcheck="false" autocomplete="off" aria-label="Custom CSS" placeholder="/* Paste or write CSS here */">${esc(s.customCss || '')}</textarea>
+        <div class="acts"><button class="btn sm" data-act="css-starter">Insert template</button><button class="btn sm" data-act="css-clear">Clear</button></div></div></div>
+      <div class="line"><div><div class="l">Performance</div><div class="s">Lite removes blur, glow drift and extra animation to keep scrolling and playback smooth on phones. Automatic uses Lite on Android.</div></div><select class="inp" data-set="perf" aria-label="Performance mode">${[['auto', 'Automatic'], ['lite', 'Lite'], ['full', 'Full effects']].map(([v, n]) => `<option value="${v}"${(s.perf || 'auto') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="line"><div><div class="l">Scrollbars</div><div class="s">Slim bars that follow the rounded shape of each panel. They can also stay out of sight until you hover.</div></div><select class="inp" data-set="scrollbar" aria-label="Scrollbar style">${SCROLLBARS.map(([v, l]) => `<option value="${v}"${(s.scrollbar || 'pill') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       ${tg('viz', 'Show visualizer', NATIVE
         ? 'Follows playback on the phone. Android does not expose the WebView’s audio samples, so the motion is generated from the track and the playback clock.'
         : 'Reacts to the real audio, not a fake animation.')}
-      <div class="line"><div><div class="l">Visualizer style</div><div class="s" id="viz-style-name">${esc(WLViz.name(vizStyleId()))} · ${plural(WLViz.styles.length, 'style')}</div></div><button class="btn" data-act="viz-gallery">Preview styles</button></div>
+      <div class="line"><div><div class="l">Visualizer style</div><div class="s" id="viz-style-name">${esc(WLViz.name(vizStyleId()))} · ${plural(vizVisible().length, 'style')}</div></div><button class="btn" data-act="viz-gallery">Preview styles</button></div>
+      <details class="style-guide viz-vis"><summary>Choose which styles appear</summary><p class="mut">Hidden styles disappear from the gallery. At least one stays on.</p><div class="chips">${WLViz.styles.map(x => `<button class="chip${vizHiddenList().includes(x.id) ? '' : ' on'}" data-act="viz-vis" data-id="${x.id}" aria-pressed="${!vizHiddenList().includes(x.id)}">${esc(x.name)}</button>`).join('')}</div></details>
       <div class="line"><div><div class="l">Visualizer size</div><div class="s">Full screen turns the visualizer into the backdrop of the player.</div></div><select class="inp" data-set="vizSize" aria-label="Visualizer size">${[['sm', 'Small'], ['md', 'Medium'], ['lg', 'Large'], ['full', 'Full screen']].map(([v, n]) => `<option value="${v}"${(s.vizSize || 'md') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      ${NATIVE ? tg('realViz', 'Real audio visualizer', 'Reacts to what the phone is actually playing. Android only exposes the output mix, so this asks for the Record Audio permission. Nothing is recorded or stored, and other apps’ sound is included while it plays. If the phone refuses, the generated visualizer is used.') : ''}
       ${NATIVE ? `${tg('lockVisualizer', 'Lock-screen now playing', 'When you lock the phone during playback, Wavelength briefly shows the artwork, the song and a visualizer over the lock screen.')}
       <div class="line"><div><div class="l">Lock-screen preview</div><div class="s">Open the brief now-playing screen without locking the phone.</div></div><button class="btn" data-act="preview-lock">Preview</button></div>
       ${nativeLockAllowed() ? '' : `<div class="line"><div><div class="l">Allow lock-screen display</div><div class="s">Android needs permission before an app can appear over the lock screen.</div></div><button class="btn" data-act="allow-lockscreen">Allow</button></div>`}` : ''}</div>
@@ -1489,7 +1904,14 @@ function vSet() {
       ${tg('smartVolume', 'Smart volume', NATIVE
         ? 'Samples the start of each song and turns loud songs down a little. It never boosts above your volume, so quiet songs stay quiet. Best-effort, not a studio master.'
         : 'Nudges quiet songs up and loud songs down while they play. Best-effort loudness balancing, not a studio master.')}
-      ${tg('skipCredits', 'Skip credits &amp; outros', 'Best effort. Only skips when the video’s own chapter or segment data clearly labels a credits/outro section.')}
+      <div class="line"><div><div class="l">Skip intros</div><div class="s">Quiet lead-ins, spoken intros and skits at the start of a song.</div></div><select class="inp" data-set="skipIntro" aria-label="Skip intros">${skipOpts(s.skipIntro)}</select></div>
+      <div class="line"><div><div class="l">Skip outros &amp; credits</div><div class="s">Credits, dead air and talking at the end. Moves on to the next song.</div></div><select class="inp" data-set="skipOutro" aria-label="Skip outros">${skipOpts(s.skipOutro)}</select></div>
+      <div class="line"><div><div class="l">Skip spoken breaks</div><div class="s">Ads, sponsor reads and long silent gaps in the middle of a song or mix.</div></div><select class="inp" data-set="skipBreaks" aria-label="Skip spoken breaks">${skipOpts(s.skipBreaks)}</select></div>
+      <div class="line"><div><div class="l">How sure before skipping</div><div class="s">Careful only acts on strong evidence. Eager acts on weaker hints and will sometimes be wrong. Automatic skips always have Undo.</div></div><select class="inp" data-set="skipSure" aria-label="How sure before skipping">${[['careful', 'Careful'], ['balanced', 'Balanced'], ['eager', 'Eager']].map(([v, l]) => `<option value="${v}"${(s.skipSure || 'balanced') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${tg('lyrics', 'Lyrics from LRCLIB', 'Adds a Lyrics button to the full-screen player. Only when you open it, the song’s title, artist and length are sent to lrclib.net to find matching lyrics.')}
+      ${tg('skipCrowd', 'Use SponsorBlock community data', 'Asks sponsor.ajay.app whether people have marked an intro or outro. It is sent a 4-character fingerprint of the video, never the video itself.')}
+      ${NATIVE ? '' : tg('skipSilence', 'Detect silence in the audio', 'After a song is saved, ffmpeg finds quiet lead-ins, dead air and long gaps. Needs ffmpeg and runs only on this computer.')}
+      <div class="line"><div><div class="l">What it has learned</div><div class="s">${Object.keys(s.skipMemory || {}).length ? `Remembers ${plural(Object.keys(s.skipMemory).length, 'song')} where you undid a skip.` : 'When you undo or rewind an automatic skip, it stops doing that for the song.'}</div></div><button class="btn" data-act="skip-forget">Forget</button></div>
       ${tg('swipeRows', 'Swipe songs for quick actions', 'On touch screens, swipe a song right to play it next or left to like it.')}
       ${tg('headphonesPause', 'Pause when headphones disconnect', NATIVE ? 'Android pauses playback when Bluetooth or wired audio disconnects.' : 'Best effort in the browser. Android handles this natively.')}
       <div class="line"><div><div class="l">Streaming quality</div><div class="s">Best available takes the highest-bitrate YouTube stream. YouTube audio is lossy; lossless playback comes from local files.</div></div><select class="inp" data-set="streamQuality" aria-label="Streaming quality"><option value="best"${s.streamQuality === 'saver' ? '' : ' selected'}>Best available</option><option value="saver"${s.streamQuality === 'saver' ? ' selected' : ''}>Data saver</option></select></div>
@@ -1500,7 +1922,7 @@ function vSet() {
       ${(s.blockedArtists || []).length ? `<div class="chips block-chips">${s.blockedArtists.map(a => `<button class="chip on" data-act="unblock-artist" data-a="${esc(a)}" title="Unblock ${esc(a)}">${esc(a)} ${I.close}</button>`).join('')}</div>` : ''}
       <div class="line"><div class="inline" style="flex:1;justify-content:flex-end"><input class="inp" id="block-artist" type="text" placeholder="Artist name" aria-label="Artist name to block"><button class="btn" data-act="block-artist">Block</button></div></div>
       <div class="line"><div class="l">Listening recap</div><button class="btn" data-go="recap">${I.chart}Open recap</button></div></div>
-    <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div><div id="access-box">${accessHTML()}</div></div>
+    <div class="box rise" style="--i:3" id="set-sync"><h2>Devices</h2><p class="mut">Sync playlists, liked songs and listening history between Wavelength installations. Settings and downloads stay on each device.</p><div id="sync-box">${syncHTML()}</div>${syncExtras()}<div id="access-box">${accessHTML()}</div></div>
     ${NATIVE ? `<div class="box rise" style="--i:3" id="set-storage"><h2>Storage</h2>
       <p class="mut">Playlists, liked songs and history live on this phone. Songs stream on demand and are not saved for offline listening yet.</p>
       <div class="storage-box" id="storage-stats">${storageHTML()}</div>
@@ -1513,6 +1935,18 @@ function vSet() {
       <div class="line"><div><div class="l">Playback cache</div><div class="s">Downloaded songs and covers stay. Only temporary stream files are cleared.</div></div><button class="btn" data-act="clear-cache">Clear cache</button></div></div>`}
     ${NATIVE ? `<div class="box rise" style="--i:4" id="set-import"><h2>Spotify import</h2><p class="mut">Spotify account import runs on the computer for now. On the phone you can paste a list of songs and match it on YouTube.</p><button class="btn" data-go="import">Paste a song list</button></div>` : `<div class="box rise" style="--i:4" id="set-import"><h2>Spotify</h2><div class="line"><div><div class="l">Client ID</div><div class="s">${h.clientId ? esc(h.clientId.slice(0, 6)) + '…' : 'Not set'} · ${h.spotifyConnected ? 'connected' : 'not connected'}</div></div><button class="btn" data-go="import">Manage</button></div>
       <div class="line"><div><div class="l">Importing</div><div class="s">Preview playlists, keep matched songs, and choose a cover before saving.</div></div><button class="btn" data-go="import">Open import</button></div></div>`}
+    ${NATIVE ? `<div class="box rise" style="--i:5" id="set-lock"><h2>Lock screen</h2><p class="mut">What appears over the lock screen while music plays. Open Preview to try changes.</p>
+      <div class="line"><div><div class="l">Layout</div><div class="s">Artwork first, compact, visualizer first, or just the title.</div></div><select class="inp" data-set="lockLayout" aria-label="Lock-screen layout">${[['art', 'Artwork'], ['compact', 'Compact'], ['viz', 'Visualizer first'], ['minimal', 'Title only']].map(([v, n]) => `<option value="${v}"${(s.lockLayout || 'art') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="line"><div><div class="l">Look</div><div class="s">Accent keeps your theme colour. Album tints the background with the cover. Black is pure black for OLED screens.</div></div><select class="inp" data-set="lockTheme" aria-label="Lock-screen look">${[['accent', 'Accent'], ['album', 'Album'], ['amoled', 'Black']].map(([v, n]) => `<option value="${v}"${(s.lockTheme || 'accent') === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      ${tg('lockControls', 'Playback buttons', 'Previous, play or pause, and next.')}
+      <div class="line"><div><div class="l">Stay visible</div><div class="s">How long it stays before fading out. Always stays until you unlock.</div></div><select class="inp" data-set="lockHide" aria-label="Lock-screen duration">${[[5, '5 seconds'], [9, '9 seconds'], [15, '15 seconds'], [0, 'Always']].map(([v, n]) => `<option value="${v}"${+(s.lockHide ?? 9) === v ? ' selected' : ''}>${n}</option>`).join('')}</select></div>
+      ${tg('lockHint', 'Show the hint line', 'The small “tap to keep” text at the bottom.')}</div>` : ''}
+    <div class="box rise" style="--i:5" id="set-features"><h2>Features</h2><p class="mut">Switch off what you do not use. Hidden features stop running and their screens and buttons disappear.</p>
+      ${FEATURES.map(([k, n, d]) => `<div class="line"><div><div class="l">${esc(n)}</div><div class="s">${esc(d)}</div></div><button class="tg${featOn(k) ? ' on' : ''}" data-act="feat-toggle" data-k="${k}" aria-label="${esc(n)}" aria-pressed="${featOn(k)}"></button></div>`).join('')}
+      ${NATIVE ? '' : `<div class="line"><div><div class="l">Discord Rich Presence</div><div class="s">Shows the song you are playing on your Discord profile. Needs the Discord desktop app open and an Application ID from discord.com/developers. Sends the title, artist and cover only to your local Discord.</div></div><button class="tg${s.discord ? ' on' : ''}" data-act="discord-toggle" aria-label="Discord Rich Presence" aria-pressed="${!!s.discord}"><i></i></button></div>
+      <div class="line"><div><div class="l">Discord Application ID</div><div class="s" id="discord-status">${discordStatusText()}</div></div><input class="inp" id="discord-id" type="text" inputmode="numeric" placeholder="Application ID" value="${esc(s.discordId || '')}" aria-label="Discord Application ID"></div>`}
+      <div class="line"><div><div class="l">Restore all features</div><div class="s">Turns everything back on.</div></div><button class="btn" data-act="feat-all-settings">Restore</button></div>
+      <div class="line"><div><div class="l">Opening screen</div><div class="s">Run the feature picker again.</div></div><button class="btn" data-act="feat-setup">Open</button></div></div>
     <div class="box rise" style="--i:5" id="set-status"><h2>Status</h2>
       <div class="line"><div><div class="l">Keyboard shortcuts</div><div class="s">Open the full list with <b>?</b>.</div></div><button class="btn" data-act="shortcuts">${I.keyboard}Shortcuts</button></div>
       <div class="line"><div class="l">Version</div><div class="meta" id="set-version">${h.version ? 'v' + esc(h.version) : (R.stats && R.stats.version ? 'v' + esc(R.stats.version) : '—')}</div></div>
@@ -1568,7 +2002,7 @@ function tileFor(r, a) {
 async function route() {
   const [name, ...rest] = (location.hash.slice(1) || 'home').split('/');
   const my = ++routeTok, v = $('#view');
-  curRoute = V[name] ? name : 'home'; curArg = decodeURIComponent(rest.join('/'));
+  curRoute = V[name] && featOn(name) ? name : 'home'; curArg = decodeURIComponent(rest.join('/'));
   R.plFilter = ''; drawKey = '';
   $$('.nav a,.mnav a').forEach(a => {
     const r = a.dataset.r || (a.dataset.go || '').split('/')[0];
@@ -1614,9 +2048,10 @@ const refreshView = () => { if (curRoute !== 'search') draw(); };
 
 /* ═════════ sidebar ═════════ */
 function drawSide() {
-  $('#side-pl').innerHTML = `<div class="spl" data-go="liked"><div class="cover liked" style="width:38px;border-radius:12px">${I.heartF}</div><div><div class="n">Liked Songs</div><div class="c">${S.liked.length} songs</div></div></div>` +
-    `<div class="spl" data-go="local"><div class="cover local-cover" style="width:38px;border-radius:12px">${I.disc}</div><div><div class="n">Local files</div><div class="c">${R.localReady ? plural(R.local.length, 'song') : 'Lossless audio'}</div></div></div>` +
-    S.playlists.map(p => `<div class="spl" data-go="playlist/${p.id}">${cover(p)}<div><div class="n">${esc(p.name)}</div><div class="c">${p.tracks.length} songs</div></div></div>`).join('');
+  $('#side-pl').innerHTML = `<div class="spl" data-go="liked" title="Liked Songs"><div class="cover liked" style="width:38px;border-radius:12px">${I.heartF}</div><div><div class="n">Liked Songs</div><div class="c">${S.liked.length} songs</div></div></div>` +
+    `<div class="spl" data-go="local" title="Local files"><div class="cover local-cover" style="width:38px;border-radius:12px">${I.disc}</div><div><div class="n">Local files</div><div class="c">${R.localReady ? plural(R.local.length, 'song') : 'Lossless audio'}</div></div></div>` +
+    [...pinnedPls(), ...S.playlists.filter(p => !isPinned(p.id))].map(p => `<div class="spl${isPinned(p.id) ? ' pinned' : ''}" data-go="playlist/${p.id}" title="${esc(p.name)}${isPinned(p.id) ? ' (pinned)' : ''}">${cover(p)}<div><div class="n">${esc(p.name)}</div><div class="c">${p.tracks.length} songs</div></div></div>`).join('');
+  syncShortcuts();
 }
 
 /* ═════════ audio engine + visualizer ═════════ */
@@ -1819,6 +2254,40 @@ function syncSleep() {
     if (!sleepLeft()) syncSleep();
   }, 15000);
 }
+
+/* Android real-audio tap: native Visualizer on the output mix, polled once per frame.
+   Falls back to the generated spectrum whenever it is off, denied or stale. */
+let tapState = 'off', tapSpec = new Float32Array(32), tapWave = new Float32Array(64), tapAt = 0;
+const tapLive = () => NATIVE && tapState === 'ok' && performance.now() - tapAt < 500 && R.playing;
+function tapPoll() {
+  if (tapState !== 'ok') return;
+  let b64 = ''; try { b64 = window.AndroidBridge.readAudioTap(); } catch {}
+  if (!b64) return;
+  try {
+    const bin = atob(b64); if (bin.length < 96) return;
+    for (let i = 0; i < 32; i++) tapSpec[i] = bin.charCodeAt(i) / 255;
+    for (let i = 0; i < 64; i++) { const c = bin.charCodeAt(32 + i); tapWave[i] = ((c > 127 ? c - 256 : c)) / 128; }
+    tapAt = performance.now();
+  } catch {}
+}
+function tapSync() {
+  if (!NATIVE) return;
+  const want = !!S.settings.realViz && !!S.settings.viz && featOn('viz') && $('#np').classList.contains('open');
+  if (!want) { if (tapState !== 'off') { try { window.AndroidBridge.stopAudioTap(); } catch {} tapState = 'off'; } return; }
+  if (tapState === 'ok') return;
+  let r = 'unavailable'; try { r = window.AndroidBridge.startAudioTap(); } catch {}
+  if (r === 'denied') { tapState = 'denied'; try { window.AndroidBridge.requestAudioPermission(); } catch {} }
+  else tapState = r === 'ok' ? 'ok' : 'unavailable';
+  if (tapState === 'unavailable') toast('This phone does not allow real audio capture. Using the generated visualizer.');
+}
+window.wlAudioPerm = ok => {
+  if (!ok) { S.settings.realViz = false; save(); tapState = 'off'; $$('[data-k="realViz"]').forEach(b => b.classList.remove('on')); toast('Permission denied. Using the generated visualizer.'); return; }
+  tapState = 'off'; tapSync();
+};
+const perfLite = () => document.documentElement.dataset.perf === 'lite';
+function applyPerf() {
+  const m = S.settings.perf; document.documentElement.dataset.perf = m === 'lite' || (m !== 'full' && NATIVE) ? 'lite' : 'full';
+}
 let vizRaf = 0, vizLast = 0, vizPrev = 0, vizStep = 0.035, phase = 0, disp = [];
 let vizW = 0, vizH = 0, vizDpr = 1, vizRO = null;
 const VSTYLES = WLViz.ids;
@@ -1852,7 +2321,7 @@ function synthLevel(i, n) {
 function vizResize() {
   const c = $('#viz'); if (!c) return;
   const w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight);
-  const dpr = Math.min(2, devicePixelRatio || 1);
+  const dpr = Math.min(NATIVE ? 1.5 : 2, devicePixelRatio || 1);
   vizW = w; vizH = h; vizDpr = dpr;
   const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
   if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
@@ -1861,15 +2330,16 @@ function vizLoop(ts) {
   vizRaf = requestAnimationFrame(vizLoop);
   if (document.hidden) return;
   const active = R.playing && (analyser || NATIVE);
-  const fps = motionReduced() ? 15 : active ? 30 : 15;
+  const fps = motionReduced() ? 15 : active ? (NATIVE ? (perfLite() ? 24 : 30) : 30) : 10;
   if (ts - vizLast < 1000 / fps - 1) return;
   const dt = Math.min(0.09, (ts - (vizPrev || ts)) / 1000);
   vizPrev = ts; vizLast = ts; vizStep = Math.max(0.012, dt * 2.1); vizRealDt = Math.max(0.008, dt);
   const c = $('#viz'); if (!c || !vizW || !vizH) return;
+  if (NATIVE) tapPoll();
   drawViz(c, c.getContext('2d'));
 }
 function vizSync() {
-  const open = $('#np').classList.contains('open'), on = open && S.settings.viz;
+  const open = $('#np').classList.contains('open'), on = open && S.settings.viz && featOn('viz');
   meterSync(open);
   const size = VIZ_SIZES.includes(S.settings.vizSize) ? S.settings.vizSize : 'md';
   document.documentElement.dataset.vizSize = size;
@@ -1887,6 +2357,7 @@ function vizSync() {
     vizLast = 0; vizPrev = 0;
   }
   if (!on && vizRaf) { cancelAnimationFrame(vizRaf); vizRaf = 0; }
+  tapSync();
 }
 /* Every style lives in viz.js and draws through one shared context. This
    file only decides where the numbers come from: the live analyser on
@@ -1894,18 +2365,21 @@ function vizSync() {
 const vizSource = {
   level: (i, n) => {
     if (!NATIVE && analyser && R.playing) return Math.min(1, (freq[Math.floor(Math.pow(i / n, 1.55) * freq.length * 0.7) + 1] / 255) * 1.12);
+    if (tapLive()) return tapSpec[Math.min(31, Math.floor(i / n * 32))];
+    if (tapLive()) return tapSpec[Math.min(31, Math.floor(i / n * 32))];
     if (NATIVE && R.playing) return WLViz.synthLevelAt(i, n, phase, vizSeed * 6.283);
     return 0.06 + 0.04 * Math.sin(phase * 2 + i * 0.55);
   },
   wave: u => {
     if (!NATIVE && analyser && R.playing) return (wave[Math.floor(u * (wave.length - 1))] - 128) / 128;
+    if (tapLive()) return tapWave[Math.min(63, Math.floor(u * 63))];
     if (NATIVE && R.playing) return WLViz.synthWaveAt(u, phase, vizSeed * 6.283);
     return Math.sin(u * vizW / 38 + phase * 2) * 0.08;
   },
 };
 const vizCtx = WLViz.makeCtx(vizSource);
 let vizCtxStyle = '', vizRealDt = 0.033;
-const vizStyleId = () => WLViz.has(S.settings.vizStyle) ? S.settings.vizStyle : 'matrix';
+const vizStyleId = () => { const h = vizHiddenList(), v = S.settings.vizStyle; if (WLViz.has(v) && !h.includes(v)) return v; return WLViz.ids.find(i => !h.includes(i)) || 'matrix'; };
 function drawViz(c, g) {
   const w = vizW, h = vizH, dpr = vizDpr;
   g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
@@ -1928,7 +2402,7 @@ function vizGallery() {
   const cur = vizStyleId();
   modal(`<div class="eyebrow">Visualizer</div><h3 class="imp-title">Choose a style</h3>
     <p class="mut">${plural(WLViz.styles.length, 'style')}, previewed live in your accent colour. Tap one to use it.${NATIVE ? ' The lock screen draws the closest of the four classic looks.' : ''}</p>
-    <div class="viz-gal" id="viz-gal">${WLViz.styles.map(s => `<button class="viz-card${s.id === cur ? ' on' : ''}" data-act="viz-pick" data-id="${s.id}" aria-pressed="${s.id === cur}" aria-label="${esc(s.name)}. ${esc(s.hint)}"><canvas aria-hidden="true"></canvas><span class="vc-n">${esc(s.name)}</span><span class="vc-h">${esc(s.hint)}</span></button>`).join('')}</div>
+    <div class="viz-gal" id="viz-gal">${vizVisible().map(s => `<button class="viz-card${s.id === cur ? ' on' : ''}" data-act="viz-pick" data-id="${s.id}" aria-pressed="${s.id === cur}" aria-label="${esc(s.name)}. ${esc(s.hint)}"><canvas aria-hidden="true"></canvas><span class="vc-n">${esc(s.name)}</span><span class="vc-h">${esc(s.hint)}</span></button>`).join('')}</div>
     <div class="acts end"><button class="btn solid" data-act="close-modal">Done</button></div>`, 'viz-sheet');
   startVizGallery();
 }
@@ -1948,10 +2422,10 @@ function startVizGallery() {
   const tick = ts => {
     galRaf = requestAnimationFrame(tick);
     if (!$('#modal').classList.contains('open') || !$('#viz-gal')) { stopVizGallery(); return; }
-    const fps = motionReduced() ? 10 : 30;
+    const fps = motionReduced() ? 10 : NATIVE ? 20 : 30;
     if (ts - last < 1000 / fps - 1) return;
     const dt = Math.min(0.09, last ? (ts - last) / 1000 : 0.033); last = ts; t += dt * 2.1;
-    const view = $('#modal .sheet').getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
+    const view = $('#modal .sheet').getBoundingClientRect(), dpr = Math.min(NATIVE ? 1.25 : 2, devicePixelRatio || 1);
     for (const k of galCards) {
       const r = k.cv.getBoundingClientRect();
       if (r.bottom < view.top || r.top > view.bottom) continue;
@@ -2256,7 +2730,7 @@ function usePrepared(p) {
   spareAudio = old;
   try { old.pause(); old.removeAttribute('src'); old.load(); } catch {}
   R.idx = p.idx; R.cur = p.t; R.resumeTime = 0;
-  creditsFor(p.t);
+  smartPlanFor(p.t);
   const my = ++playTok;
   clearSkip();
   loadingTrack = my;
@@ -2293,7 +2767,7 @@ async function playIdx(i, startAt = 0) {
   clearStall(); ensureGraph(); uiNow(); setBuffering(true);
   cancelPrepared();
   clearSkip();
-  creditsFor(t);
+  smartPlanFor(t);
   mediaErrRetries = 0;
 
   // Step 1: resolve YouTube ID if missing. Local files are already ready.
@@ -2448,6 +2922,7 @@ const warmSeen = new Map();
 let warmBusy = false;
 
 function warmTrack(t) {
+  smartWarm(t);
   if (!t || t.miss || t.localId) return;
   if (t.ytId) return warmId(t.ytId);
   resolve(t).then(() => { if (t.ytId) warmId(t.ytId); }).catch(() => {});
@@ -2567,43 +3042,192 @@ function onEnded() {
   next();
 }
 
-/* ═════════ credits / outro skipping ═════════ */
-/* Only the video's own chapter/segment titles are used. Matching ordinary
-   endings would cut real songs short, so the marker must sit in the second
-   half and contain an explicit credits/outro word. */
-const CREDIT_RE = /\b(credits?|end credits|outro|thanks? for watching|acknowledg|farewell|goodbye|end card|outro music)\b/i;
-function creditsApply(t, info) {
-  if (!info || !t || uid(t) !== uid(R.cur || {})) return;
-  const dur = +t.duration || 0;
-  const list = Array.isArray(info.chapters) ? info.chapters : Array.isArray(info.segments) ? info.segments : [];
-  let at = 0;
-  for (const c of list) {
-    const start = +c.start || 0;
-    const title = String(c.title || '');
-    if (start > 30 && CREDIT_RE.test(title) && (!dur || start >= dur * 0.5) && (!dur || start < dur - 4)) { at = start; break; }
+/* ═════════ smart intro / outro skipping ═════════
+   public/js/skipper.js decides what is skippable and how sure it is; this is
+   the part that talks to the player. Four kinds of evidence feed it: the
+   video's chapters, timestamps in its description, SponsorBlock community
+   data, and (on desktop) real silence analysis from ffmpeg.
+
+   Each of intros, outros and spoken breaks is Off, a "Skip" button, or
+   automatic. Automatic skips only happen when the evidence is strong enough,
+   always come with Undo, and the app learns from that Undo. */
+const SKIP_MODE_KEY = { intro: 'skipIntro', outro: 'skipOutro', break: 'skipBreaks' };
+const skipMode = kind => featOn('skipper') ? (S.settings[SKIP_MODE_KEY[kind]] || 'off') : 'off';
+function skipOpts(v) {
+  return [['off', 'Off'], ['button', 'Show a Skip button'], ['auto', 'Skip automatically']]
+    .map(([k, l]) => `<option value="${k}"${(v || 'off') === k ? ' selected' : ''}>${l}</option>`).join('');
+}
+const skipAny = () => Object.values(SKIP_MODE_KEY).some(k => (S.settings[k] || 'off') !== 'off');
+R.crowdCache = new Map(); R.silCache = new Map(); R.skip = null; R.noSilence = false;
+
+const skipInfo = id => R.infoCache[id] ? Promise.resolve(R.infoCache[id])
+  : api('/api/info/' + encodeURIComponent(id)).then(i => (R.infoCache[id] = i || {}));
+
+/* SponsorBlock is asked about a 4-character fingerprint of the video id, never the id itself. */
+async function skipCrowd(id) {
+  if (!S.settings.skipCrowd || !id) return null;
+  const hit = R.crowdCache.get(id);
+  if (hit && (hit.ok || Date.now() - hit.at < 5 * 60e3)) return hit.segs;
+  try {
+    const ctl = new AbortController(), kill = setTimeout(() => ctl.abort(), 5000);
+    const r = await fetch(WLSkip.crowdUrl(await WLSkip.hashPrefix(id)), { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
+    clearTimeout(kill);
+    let segs;
+    if (r.status === 404) segs = [];
+    else if (r.ok) segs = WLSkip.pickCrowd(await r.json(), id);
+    else throw new Error('status ' + r.status);
+    R.crowdCache.set(id, { ok: true, segs, at: Date.now() });
+    if (R.crowdCache.size > 300) R.crowdCache.delete(R.crowdCache.keys().next().value);
+    return segs;
+  } catch { R.crowdCache.set(id, { ok: false, segs: null, at: Date.now() }); return null; }
+}
+
+/* Silence analysis needs ffmpeg and the finished audio file, so it is desktop
+   only and may not be ready the first time a song plays. */
+async function skipSilence(t) {
+  if (NATIVE || R.noSilence || !S.settings.skipSilence) return null;
+  const key = t.localId ? 'local/' + t.localId : t.ytId; if (!key) return null;
+  const hit = R.silCache.get(key); if (hit) return hit;
+  try {
+    const r = await api('/api/silence/' + (t.localId ? 'local/' + encodeURIComponent(t.localId) : encodeURIComponent(t.ytId)));
+    if (r && r.ready) { R.silCache.set(key, r); return r; }
+    if (r && r.unavailable) R.noSilence = true;
+  } catch {}
+  return null;
+}
+
+const smartDur = t => (isFinite(audio.duration) && audio.duration) || (t && +t.duration) || (R.skip && R.skip.info && +R.skip.info.duration) || 0;
+const smartMemory = u => (S.settings.skipMemory || {})[u] || null;
+function smartRemember(u, kind, value) {
+  const m = S.settings.skipMemory || (S.settings.skipMemory = {});
+  const e = m[u] || (m[u] = {}); e[kind] = value; e.at = Date.now();
+  const keys = Object.keys(m);
+  if (keys.length > 400) for (const k of keys.sort((a, b) => (m[a].at || 0) - (m[b].at || 0)).slice(0, keys.length - 400)) delete m[k];
+  save();
+}
+
+function smartPlanFor(t) {
+  hideSkipChip(); R.skip = null;
+  if (!t || !skipAny()) { renderSkipMarks(); return; }
+  const k = R.skip = { uid: uid(t), t, plan: null, dur: 0, info: null, crowd: null, sil: null, fired: {}, honored: {}, oursAt: 0, lastAuto: null, chip: null };
+  const live = () => R.skip === k;
+  if (t.ytId) {
+    skipCrowd(t.ytId).then(c => { if (live() && c) { k.crowd = c; smartRebuild(); } });
+    // Chapters come from yt-dlp, which is slow, so wait until the song is underway.
+    setTimeout(() => { if (live()) skipInfo(t.ytId).then(i => { if (live()) { k.info = i; smartRebuild(); } }).catch(() => {}); }, 1800);
   }
-  R.credits = at ? { at, dur } : null;
+  const trySilence = n => skipSilence(t).then(r => {
+    if (!live()) return;
+    if (r) { k.sil = r; smartRebuild(); }
+    else if (n < 3 && !R.noSilence) setTimeout(() => { if (live()) trySilence(n + 1); }, [7000, 22000, 60000][n]);
+  });
+  trySilence(0);
 }
-function creditsFor(t) {
-  R.credits = null; R.creditDone = '';
-  if (!S.settings.skipCredits || !t || !t.ytId) return;
-  const id = t.ytId;
-  const hit = R.infoCache[id];
-  if (hit) { creditsApply(t, hit); return; }
-  api('/api/info/' + encodeURIComponent(id)).then(info => {
-    R.infoCache[id] = info || {};
-    if (R.cur && uid(R.cur) === uid(t)) creditsApply(t, info);
-  }).catch(() => {});
+function smartRebuild() {
+  const k = R.skip; if (!k || !R.cur || k.uid !== uid(R.cur)) return;
+  const dur = smartDur(R.cur), segs = [];
+  if (k.info) {
+    const ch = Array.isArray(k.info.chapters) ? k.info.chapters : [];
+    segs.push(...(ch.length ? WLSkip.fromChapters(ch, dur) : WLSkip.fromChapters(WLSkip.parseTimestamps(k.info.description, dur), dur, 'desc')));
+  }
+  if (k.crowd) segs.push(...WLSkip.fromCrowd(k.crowd, dur));
+  if (k.sil) segs.push(...WLSkip.fromSilence(k.sil, dur));
+  k.plan = WLSkip.plan(segs, dur); k.dur = dur;
+  renderSkipMarks(); smartTick(audio.currentTime || 0, dur);
 }
-function creditsTick(c, d) {
-  if (!S.settings.skipCredits || !R.cur || !R.credits || !d) return;
-  if (R.creditDone === uid(R.cur)) return;
-  if (c + 0.4 < R.credits.at) return;
-  R.creditDone = uid(R.cur);
-  if (R.repeat === 2) return;
-  if (canNext()) { toast('Skipped credits'); next(); }
-  else { try { audio.currentTime = Math.max(0, d - 1); } catch {} }
+const smartOpts = k => ({ intro: skipMode('intro'), outro: skipMode('outro'), breaks: skipMode('break'), sure: S.settings.skipSure, fired: k.fired, honored: k.honored, remembered: smartMemory(k.uid) });
+const smartSegs = k => (k && k.plan ? [k.plan.intro, ...k.plan.breaks, k.plan.outro].filter(Boolean) : []);
+const smartKey = seg => seg.kind + '@' + Math.round(seg.start);
+
+function smartTick(c, d) {
+  const k = R.skip; if (!k || !k.plan || !R.cur || k.uid !== uid(R.cur) || !d || d < 25) return;
+  if (k.chip && Date.now() - k.chip.at > 15000) { k.honored[k.chip.key] = true; hideSkipChip(); }
+  const hit = WLSkip.due(k.plan, c, smartOpts(k));
+  if (!hit) { if (k.chip) hideSkipChip(); return; }
+  if (hit.act === 'auto') smartDo(hit.seg, hit.key, true); else showSkipChip(hit);
 }
+
+function smartDo(seg, key, auto) {
+  const k = R.skip; if (!k) return;
+  k.fired[key] = true; hideSkipChip();
+  const from = audio.currentTime || 0, d = smartDur(R.cur), t0 = R.cur, idx0 = R.idx;
+  const word = seg.kind === 'break' ? 'break' : seg.kind;
+  if (seg.toEnd) {
+    if (R.repeat === 2) return;                       // looping one song: never skip its ending
+    k.oursAt = Date.now();
+    if (canNext()) next(); else { try { audio.currentTime = Math.max(0, d - 0.8); } catch {} }
+  } else {
+    k.oursAt = Date.now();
+    try { audio.currentTime = Math.min(seg.to, Math.max(0, d - 0.5)); } catch {}
+  }
+  if (!auto) return;
+  k.lastAuto = { key, kind: seg.kind, to: seg.to, at: Date.now() };
+  undoable(`Skipped ${word}`, () => {
+    k.honored[key] = true;
+    smartRemember(k.uid, seg.kind, (smartMemory(k.uid) || {})[seg.kind] === 'button' ? 'none' : 'button');
+    if (seg.toEnd) { if (R.queue[idx0] && uid(R.queue[idx0]) === uid(t0)) playIdx(idx0, from); }
+    else { k.oursAt = Date.now(); try { audio.currentTime = from; } catch {} }
+  });
+}
+
+/* The person moved the playhead themselves. */
+function smartSeeking() {
+  const k = R.skip; if (!k || !k.plan || Date.now() - k.oursAt < 700) return;
+  const c = audio.currentTime || 0;
+  // Rewinding straight after an automatic skip means "I wanted that part".
+  if (k.lastAuto && Date.now() - k.lastAuto.at < 9000 && c < k.lastAuto.to - 1) {
+    k.honored[k.lastAuto.key] = true;
+    smartRemember(k.uid, k.lastAuto.kind, (smartMemory(k.uid) || {})[k.lastAuto.kind] === 'button' ? 'none' : 'button');
+    k.lastAuto = null;
+  }
+  // Seeking into a section means they want to hear it.
+  for (const seg of smartSegs(k)) if (c >= seg.start + 0.4 && c < seg.end - 0.3) k.honored[smartKey(seg)] = true;
+  hideSkipChip();
+}
+
+/* ── the Skip button ── */
+function chipEl() {
+  let el = $('#skipchip');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'skipchip'; el.className = 'skipchip'; el.setAttribute('role', 'group'); el.setAttribute('aria-label', 'Skip suggestion');
+    el.innerHTML = '<button class="skipchip-go" data-act="skip-now"><span class="sk-l"></span><span class="sk-t"></span></button><button class="skipchip-x" data-act="skip-dismiss" aria-label="Dismiss" title="Not now">×</button>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function showSkipChip(hit) {
+  const k = R.skip; if (!k) return;
+  if (k.chip && k.chip.key === hit.key) return;
+  k.chip = { key: hit.key, seg: hit.seg, at: Date.now() };
+  const seg = hit.seg, el = chipEl();
+  const left = Math.max(0, (seg.toEnd ? smartDur(R.cur) : seg.to) - (audio.currentTime || 0));
+  $('.sk-l', el).textContent = seg.kind === 'intro' ? 'Skip intro' : seg.kind === 'break' ? 'Skip break' : (seg.toEnd ? 'Skip outro' : 'Skip');
+  $('.sk-t', el).textContent = left >= 1 ? fmt(left) : '';
+  el.classList.add('show');
+}
+function hideSkipChip() { if (R.skip) R.skip.chip = null; const el = $('#skipchip'); if (el) el.classList.remove('show'); }
+function skipNow() {
+  const k = R.skip;
+  if (k && k.chip) { smartDo(k.chip.seg, k.chip.key, false); return true; }
+  toast('Nothing to skip here');
+  return false;
+}
+
+/* Faint marks on the seek bar show what was detected. */
+function renderSkipMarks() {
+  const k = R.skip, segs = smartSegs(k).filter(seg => WLSkip.actionFor(seg, skipMode(seg.kind), S.settings.skipSure) !== 'none');
+  $$('.dtw[data-seek] .dt').forEach(dt => {
+    dt.querySelectorAll('.skm').forEach(n => n.remove());
+    if (!k || !k.dur) return;
+    for (const seg of segs) {
+      const a = Math.max(0, seg.start / k.dur * 100), w = Math.max(0.8, (Math.min(seg.end, k.dur) - seg.start) / k.dur * 100);
+      dt.insertAdjacentHTML('beforeend', `<b class="skm skm-${seg.kind}" style="left:${a.toFixed(2)}%;width:${w.toFixed(2)}%" title="${esc(seg.kind)} · ${esc(seg.why.join(' + '))}"></b>`);
+    }
+  });
+}
+function smartSettingsChanged() { smartPlanFor(R.cur); if (R.cur && audio.currentTime > 0) smartRebuild(); }
+/* Warm what is cheap for the next song so its Skip button is instant. */
+function smartWarm(t) { if (skipAny() && t && t.ytId && S.settings.skipCrowd) skipCrowd(t.ytId); }
 
 for (const el of audioEls) {
   el.addEventListener('play',    () => { if (el === audio) setPlaying(true); });
@@ -2636,7 +3260,8 @@ for (const el of audioEls) {
     skipBroken('Skipping "' + (R.cur && R.cur.title || 'this track') + '" after a playback error');
   });
   el.addEventListener('timeupdate', () => { if (el === audio && !R.seeking) queueTime(); });
-  el.addEventListener('loadedmetadata', () => { if (el === audio) uiTime(); });
+  el.addEventListener('loadedmetadata', () => { if (el === audio) { uiTime(); smartRebuild(); } });
+  el.addEventListener('seeking', () => { if (el === audio) smartSeeking(); });
   el.addEventListener('stalled',  () => { if (el === audio) console.warn('[audio] stalled'); });
   el.addEventListener('waiting',  () => { if (el === audio) { console.warn('[audio] waiting/buffering'); setBuffering(true); } });
 }
@@ -2662,7 +3287,8 @@ function uiTime() {
   $$('[data-seek]').forEach(el => { el.setAttribute('aria-valuenow', d ? Math.round(c / d * 100) : 0); el.setAttribute('aria-valuetext', `${fmt(c)} of ${fmt(d)}`); });
   mediaPos(c, d);
   smartVolumeTick();
-  creditsTick(c, d);
+  smartTick(c, d);
+  if (R.lyr.on) lyricsSync();
 }
 function seekPreview(f, final) {
   const d = (isFinite(audio.duration) && audio.duration) || (R.cur && R.cur.duration) || 0; if (!d) return;
@@ -2758,12 +3384,13 @@ async function watchAudioOutputs() {
 function syncNativePrefs() {
   if (!NATIVE) return;
   try { window.AndroidBridge.setHeadphonesPause(!!S.settings.headphonesPause); } catch {}
+  try { window.AndroidBridge.setLockPrefs(S.settings.lockLayout || 'art', S.settings.lockTheme || 'accent', S.settings.lockControls !== false, Math.round((+(S.settings.lockHide ?? 9)) * 1000), S.settings.lockHint !== false); } catch {}
   try {
     window.AndroidBridge.setVisualizerPrefs(
-      S.settings.vizStyle || 'matrix',
+      vizStyleId(),
       S.settings.vizSize || 'md',
-      !!S.settings.viz,
-      !!S.settings.lockVisualizer,
+      !!S.settings.viz && featOn('viz'),
+      !!S.settings.lockVisualizer && featOn('viz'),
       VC.accent || '#d71921'
     );
   } catch {}
@@ -2879,6 +3506,7 @@ function startSmooth() {
   });
 }
 function uiNow() {
+  if (R.lyr && R.lyr.on && R.cur && uid(R.cur) !== R.lyr.key) lyricsLoad();
   const t = R.cur; if (!t) { updateTransport(); return; }
   const artist = t.artist + (t.localId ? ' · ' + localQualityText(t) : '');
   for (const sel of ['#p-meta', '#np-art', '.np-meta']) { const n = $(sel); if (n) { n.classList.remove('swap'); void n.offsetWidth; n.classList.add('swap'); } }
@@ -3387,7 +4015,7 @@ const KEY_ROWS = [
   ['Play / pause', ['Space', 'K']], ['Next / previous', ['N', 'P']], ['Seek 5 seconds', ['←', '→']],
   ['Volume', ['↑', '↓']], ['Mute', ['M']], ['Like current song', ['L']],
   ['Shuffle', ['S']], ['Repeat mode', ['R']], ['Full-screen player', ['F']], ['Queue', ['Q']],
-  ['Sleep timer', ['T']], ['Visualizer styles', ['V']], ['Edit current song', ['E']], ['Playback speed', ['[', ']']], ['Undo last remove', ['⌘Z', 'Ctrl Z']],
+  ['Skip intro / outro', ['K']], ['Lyrics', ['Y']], ['Sleep timer', ['T']], ['Visualizer styles', ['V']], ['Edit current song', ['E']], ['Playback speed', ['[', ']']], ['Undo last remove', ['⌘Z', 'Ctrl Z']],
   ['Focus search', ['/', '⌘K']], ['Shortcuts', ['?']], ['Close overlays', ['Esc']]
 ];
 function showShortcuts() {
@@ -3504,6 +4132,51 @@ const acts = {
     S.playlists.push(pl); save(); drawSide();
     toast(`Saved ${plural(tracks.length, 'song')} as “${pl.name}”`);
   },
+  remote: el => { remoteTick({ to: el.dataset.to, cmd: el.dataset.c }); setTimeout(() => remoteTick(), 700); },
+  'folder-set': async () => {
+    const dir = ($('#folder-dir') || {}).value || '';
+    try { R.folder = await api('/api/sync/folder', { method: 'POST', json: { dir } }); await refreshLibraryState(); toast(dir ? 'Sync folder set' : 'Sync folder removed'); } catch (e) { toast(e.message || 'Could not use that folder'); }
+    paintFolder();
+  },
+  'folder-merge': async () => { try { const r = await api('/api/sync/folder/merge', { method: 'POST', json: {} }); R.folder = r; await refreshLibraryState(); toast(r.merged ? `Merged ${plural(r.merged, 'device file')}` : 'Already up to date'); } catch (e) { toast(e.message || 'Merge failed'); } paintFolder(); },
+  'folder-clear': async () => { try { R.folder = await api('/api/sync/folder', { method: 'POST', json: { dir: '' } }); } catch {} paintFolder(); },
+  'recap-view': el => { R.recapView = el.dataset.v; draw(); },
+  'recap-preset': el => {
+    const f = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const to = new Date(), from = new Date(); const n = el.dataset.n;
+    if (n === 'month') from.setDate(1); else if (n === 'week') from.setDate(from.getDate() - ((from.getDay() + 6) % 7)); else from.setDate(from.getDate() - (+n - 1));
+    R.recapView = n === '90' ? 'weeks' : 'days';
+    nav('recap/' + f(from) + '~' + f(to));
+  },
+  pinpl: el => togglePin(el.dataset.id),
+  'feat-pick': el => {
+    const k = el.dataset.k; featDraft.has(k) ? featDraft.delete(k) : featDraft.add(k);
+    const on = !featDraft.has(k); el.classList.toggle('on', on); el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  },
+  'feat-all': () => { S.settings.off = []; save(); applyFeatures(); closeModal(false); toast('Everything is on'); },
+  'feat-done': () => { S.settings.off = [...featDraft]; save(); applyFeatures(); closeModal(false); drawSide(); if (!featOn(curRoute)) location.hash = '#home'; else if (curRoute === 'settings') draw(); toast(S.settings.off.length ? `${plural(S.settings.off.length, 'feature')} switched off` : 'Everything is on'); },
+  'feat-setup': () => featureSetup(),
+  'feat-toggle': el => {
+    const k = el.dataset.k, off = new Set(S.settings.off || []);
+    off.has(k) ? off.delete(k) : off.add(k); S.settings.off = [...off]; save();
+    const on = featOn(k); el.classList.toggle('on', on); el.setAttribute('aria-pressed', on ? 'true' : 'false'); applyFeatures();
+    if (!featOn(curRoute)) location.hash = '#home';
+  },
+  'feat-all-settings': () => { S.settings.off = []; save(); applyFeatures(); $$('[data-act="feat-toggle"]').forEach(b => { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); }); toast('All features restored'); },
+  'viz-vis': el => {
+    const id = el.dataset.id, h = new Set(vizHiddenList());
+    if (h.has(id)) h.delete(id);
+    else { if (WLViz.ids.length - h.size <= 1) return toast('Keep at least one style on'); h.add(id); }
+    S.settings.vizHidden = [...h]; save();
+    const on = !h.has(id); el.classList.toggle('on', on); el.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (h.has(S.settings.vizStyle)) S.settings.vizStyle = vizStyleId();
+    vizSync(); syncNativePrefs();
+    const label = $('#viz-style-name'); if (label) label.textContent = `${WLViz.name(vizStyleId())} · ${plural(vizVisible().length, 'style')}`;
+  },
+  'discord-toggle': el => {
+    S.settings.discord = !S.settings.discord; save(); el.classList.toggle('on', S.settings.discord); el.setAttribute('aria-pressed', S.settings.discord ? 'true' : 'false');
+    if (S.settings.discord && !S.settings.discordId) toast('Add your Discord Application ID below'); discordPush(true);
+  },
   np: toggleNP,
   'viz-style': () => vizGallery(),
   'viz-gallery': () => vizGallery(),
@@ -3602,6 +4275,25 @@ const acts = {
     }, () => delCover(p.cover && p.cover.url));
   },
   'toast-undo': () => { runUndo(); },
+  'layout-gallery': () => layoutGallery(),
+  'layout-pick': el => {
+    const p = LAYOUT_PRESETS.find(x => x.id === el.dataset.id); if (!p) return;
+    S.settings.navPos = p.nav; S.settings.dockPos = p.dock; S.settings.contentWidth = p.cw;
+    save(); applyLayout(); layoutRefresh();
+  },
+  'layout-set': el => {
+    const k = el.dataset.k; if (!['navPos', 'dockPos', 'contentWidth'].includes(k)) return;
+    S.settings[k] = el.dataset.v; save(); applyLayout(); layoutRefresh();
+  },
+  'layout-reset': () => { S.settings.navPos = 'left'; S.settings.dockPos = 'bottom'; S.settings.contentWidth = 'full'; save(); applyLayout(); layoutRefresh(); },
+  'css-starter': () => { const t = $('#custom-css'); if (!t) return; if (!t.value.trim()) t.value = CSS_STARTER; else t.value = t.value.replace(/\s*$/, '\n\n') + CSS_STARTER; S.settings.customCss = t.value; save(); applyCustomCss(); },
+  'css-clear': () => { const t = $('#custom-css'); if (t) t.value = ''; S.settings.customCss = ''; save(); applyCustomCss(); toast('Custom CSS cleared'); },
+  lyrics: () => lyricsToggle(),
+  'lyr-retry': () => lyricsLoad(),
+  'lyr-line': el => { const t = +el.dataset.t; if (isFinite(t)) { audio.currentTime = Math.max(0, t); R.lyr.idx = -1; lyricsSync(true); } },
+  'skip-now': () => { skipNow(); },
+  'skip-dismiss': () => { const k = R.skip; if (k && k.chip) { k.honored[k.chip.key] = true; } hideSkipChip(); },
+  'skip-forget': () => { S.settings.skipMemory = {}; save(); toast('Forgot what it learned from your Undo taps'); },
   'edit-song': () => editSong(R.cur),
   'speed-menu': el => { const b = el.getBoundingClientRect(); speedMenu(b.left, b.top - 14 - SPEEDS.length * 44); },
   'se-pick': () => {
@@ -3612,13 +4304,29 @@ const acts = {
         const url = await songImage(i.files[0]);
         if (!SE) { if (url.startsWith('/covers/')) delCover(url); return; }
         if (url.startsWith('/covers/')) SE.up.push(url);
-        SE.art = url; const f = $('#se-art-url'); if (f) f.value = url.startsWith('http') ? url : ''; sePreview();
+        SE.art = url; const f = $('#se-art-url'); if (f) f.value = url.startsWith('http') ? url : ''; sePreview(); seFocus();
       } catch (e) { toast('Couldn’t use that image: ' + e.message); }
     };
     i.click();
   },
-  'se-orig-art': () => { if (!SE) return; SE.art = SE.orig.art || ''; const f = $('#se-art-url'); if (f) f.value = SE.art.startsWith('http') ? SE.art : ''; sePreview(); },
-  'se-no-art': () => { if (!SE) return; SE.art = ''; const f = $('#se-art-url'); if (f) f.value = ''; sePreview(); },
+  'se-orig-art': () => { if (!SE) return; SE.art = SE.orig.art || ''; const f = $('#se-art-url'); if (f) f.value = SE.art.startsWith('http') ? SE.art : ''; sePreview(); seFocus(); },
+  'se-no-art': () => { if (!SE) return; SE.art = ''; const f = $('#se-art-url'); if (f) f.value = ''; sePreview(); seFocus(); },
+  'se-spotify': async el => {
+    if (!SE) return;
+    try {
+      let url = SE.spArt;
+      if (!url) {
+        el.disabled = true;
+        const r = await fetch('https://open.spotify.com/oembed?url=' + encodeURIComponent('https://open.spotify.com/track/' + SE.sp), { credentials: 'omit', referrerPolicy: 'no-referrer' });
+        if (!r.ok) throw new Error('not found');
+        url = (await r.json()).thumbnail_url || '';
+      }
+      if (!url) throw new Error('no image');
+      if (!SE) return;
+      SE.spArt = url; SE.art = url; const f = $('#se-art-url'); if (f) f.value = url; sePreview(); seFocus();
+    } catch { toast('Couldn’t get the Spotify image for this song'); }
+    finally { el.disabled = false; }
+  },
   'se-save': seSave,
   'se-reset': () => { if (SE) songRestore(SE.key); },
   plmore: playlistMore,
@@ -3821,8 +4529,10 @@ const acts = {
   accent: el => { S.settings.accent = el.dataset.c; applyTheme(); save(); draw(); }, 'accent-reset': () => { S.settings.accent = null; applyTheme(); save(); draw(); },
   tg: el => {
     const k = el.dataset.k; S.settings[k] = !S.settings[k]; el.classList.toggle('on', S.settings[k]); save();
-    if (k === 'viz') { vizSync(); syncNativePrefs(); }
-    if (k === 'lockVisualizer') syncNativePrefs();
+    if (k === 'viz' || k === 'realViz') { vizSync(); syncNativePrefs(); }
+    if (k === 'lockVisualizer' || k === 'lockControls' || k === 'lockHint') syncNativePrefs();
+    if (k === 'syncControl') { remoteTick(); paintDevices(); }
+    if (k === 'syncOnOpen' || k === 'syncDaily') syncPaint();
     if (k === 'contrast') applyReading();
     if (k === 'resume' && !S.settings.resume) clearSession();
     if (k === 'gapless') { if (S.settings.gapless) schedulePrepare(500); else cancelPrepared(); }
@@ -3835,7 +4545,9 @@ const acts = {
         if (!S.settings.smartVolume && normGain && actx) { R.normGain = 1; normGain.gain.setValueAtTime(1, actx.currentTime); }
       }
     }
-    if (k === 'skipCredits') { if (S.settings.skipCredits) creditsFor(R.cur); else { R.credits = null; R.creditDone = ''; } }
+    if (k === 'skipCrowd' || k === 'skipSilence') smartSettingsChanged();
+    if (k === 'lyrics' && S.settings.lyrics === false && R.lyr.on) lyricsToggle(false);
+    if (k === 'dotBg') applyDots();
     if (k === 'headphonesPause') syncNativePrefs();
     if (k === 'noAi') { refreshView(); toast(S.settings.noAi ? 'No AI filter on · keyword based' : 'No AI filter off'); }
   },
@@ -3844,6 +4556,7 @@ const acts = {
 document.addEventListener('pointerdown', () => { delete document.documentElement.dataset.kbd; }, true);
 document.addEventListener('click', e => {
   const t = e.target;
+  { const ll = t.closest && t.closest('.ll'); if (ll) { acts['lyr-line'](ll); return; } }
   if (t.closest('.qgrip') || Date.now() - (R.dragAt || 0) < 400) { e.preventDefault(); return; }
   if (t.closest('.row') && Date.now() - (R.longPressAt || 0) < 650) { e.preventDefault(); return; }
   if (!t.closest('#menu') && !t.closest('[data-act=menu]')) closeMenu();
@@ -3897,12 +4610,25 @@ document.addEventListener('change', e => {
   }
   if (k === 'motion') { S.settings.motion = el.value; applyMotion(); save(); vizSync(); return; }
   S.settings[k] = k === 'quality' ? +el.value : el.value; save();
+  if (k.startsWith('skip')) smartSettingsChanged();
+  if (k === 'scrollbar') applyScrollbar();
+  if (k === 'perf') applyPerf();
+  if (k === 'lockLayout' || k === 'lockTheme' || k === 'lockHide') { if (k === 'lockHide') { S.settings.lockHide = +S.settings.lockHide; save(); } syncNativePrefs(); }
   if (k === 'vizStyle' || k === 'vizSize') { vizSync(); syncNativePrefs(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'accent-pick') { S.settings.accent = e.target.value; applyTheme(); save(); }
   if (e.target.id === 'set-find') filterSettings();
   if (e.target.id === 'se-art-url' && SE) { const v = e.target.value.trim(); if (!v || imgOk(v)) { SE.art = v; sePreview(); } }
+  if (e.target.dataset && e.target.dataset.dots) {
+    S.settings[e.target.dataset.dots] = +e.target.value; applyDots();
+    const lab = $('#' + e.target.dataset.dots + '-v'); if (lab) lab.textContent = e.target.dataset.dots === 'dotOpacity' ? e.target.value + '%' : e.target.value + ' px';
+    clearTimeout(R.dotSave); R.dotSave = setTimeout(save, 400);
+  }
+  if (e.target.id === 'custom-css') {
+    S.settings.customCss = e.target.value; applyCustomCss();
+    clearTimeout(R.cssSave); R.cssSave = setTimeout(save, 600);
+  }
   if (e.target.id === 'pl-find') { R.plFilter = e.target.value.trim().toLowerCase(); repaintPlaylist(); }
   if (e.target.id === 'sp-list') updateListCount();
   if (e.target.id === 'imp-name' && IMPORT) IMPORT.name = e.target.value;
@@ -3955,7 +4681,7 @@ document.addEventListener('touchstart', e => {
   if (!matchMedia('(pointer: coarse)').matches) return;
   const player = e.target.closest('#player'), np = e.target.closest('#np'), queue = e.target.closest('#queue');
   if (!player && !np && !queue) return;
-  if (e.target.closest('button,[data-seek],[data-vol],input,.qgrip')) return;
+  if (e.target.closest('button,[data-seek],[data-vol],input,.qgrip,.lyr-scroll')) return;
   const p = e.touches[0];
   touchStart = { x: p.clientX, y: p.clientY, player, np, queue };
 }, { passive: true });
@@ -4070,6 +4796,10 @@ const goSearch = v => {
 $('#q').addEventListener('input', e => { clearTimeout(qT); updateSearchClear(); const v = e.target.value; qT = setTimeout(() => goSearch(v), isSpUrl(v) ? 50 : 550); });
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(qT); goSearch(e.target.value); } });
 document.addEventListener('keydown', e => {
+  if (SE && e.key === 'Enter' && !e.isComposing && e.target.closest && e.target.closest('#modal')) {
+    const field = e.target.tagName === 'INPUT';
+    if (field || e.metaKey || e.ctrlKey) { e.preventDefault(); seSave(); return; }
+  }
   if (e.key === 'Tab') document.documentElement.dataset.kbd = '1';
   const typing = /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable;
   const modalOpen = $('#modal').classList.contains('open');
@@ -4127,6 +4857,8 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'KeyR') acts.repeat();
   else if (e.code === 'KeyF') toggleNP();
   else if (e.code === 'KeyV') vizGallery();
+  else if (e.code === 'KeyK') skipNow();
+  else if (e.code === 'KeyY') lyricsToggle();
   else if (e.code === 'KeyE') editSong(R.cur);
   else if (e.key === '[' || e.key === ']') { const i = SPEEDS.indexOf(+S.settings.speed); setSpeed(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + (e.key === ']' ? 1 : -1)))]); }
   else if (e.code === 'KeyT') sleepMenu(innerWidth / 2 - 100, innerHeight / 2 - 120);
@@ -4142,9 +4874,37 @@ document.addEventListener('visibilitychange', () => {
 addEventListener('pagehide', () => { flushUndo(); flushListening(); api('/api/state', { method: 'PUT', json: S }).catch(() => {}); });
 
 /* ═════════ boot ═════════ */
+
+/* ── Discord Rich Presence (desktop). The local server owns the Discord IPC socket. ── */
+let discordT = 0, discordOk = null;
+const discordStatusText = () => discordOk === true ? 'Connected to Discord.' : discordOk === false ? 'Discord is not running or the ID is wrong.' : 'Not connected.';
+function discordPush(now) {
+  if (NATIVE) return;
+  clearTimeout(discordT);
+  discordT = setTimeout(async () => {
+    const on = !!S.settings.discord && /^\d{15,25}$/.test(S.settings.discordId || '') && R.cur;
+    const t = R.cur;
+    const body = on && t ? { id: S.settings.discordId, title: t.title || 'Untitled', artist: t.artist || '', art: /^https:/.test(t.art || '') ? t.art : '', playing: !!R.playing,
+      start: Math.floor(Date.now() / 1000 - (audio.currentTime || 0)), dur: isFinite(audio.duration) ? audio.duration : (t.duration || 0) } : { id: S.settings.discordId || '', clear: true };
+    if (!S.settings.discord && discordOk === null) return;
+    try { const r = await api('/api/discord', { method: 'POST', json: body }); discordOk = r && r.connected ? true : (S.settings.discord ? false : null); } catch { discordOk = false; }
+    const st = $('#discord-status'); if (st) st.textContent = discordStatusText();
+  }, now ? 0 : 400);
+}
+['play', 'pause', 'seeked', 'loadedmetadata'].forEach(ev => document.addEventListener(ev, () => discordPush(), true));
+document.addEventListener('change', e => { if (e.target && e.target.id === 'discord-id') { S.settings.discordId = e.target.value.trim(); save(); discordPush(true); } });
+new MutationObserver(hideOffSettings).observe(document.getElementById('view'), { childList: true });
+
 (async function boot() {
   $$('[data-ic]').forEach(e => e.innerHTML = I[e.dataset.ic]); buildDm();
-  try { const st = await api('/api/state'); if (st) S = { ...DEF, ...st, settings: { ...DEF.settings, ...st.settings } }; } catch {}
+  try {
+    const st = await api('/api/state');
+    if (st) {
+      S = { ...DEF, ...st, settings: { ...DEF.settings, ...st.settings } };
+      // The old single "skip credits" switch becomes "skip outros automatically".
+      if (st.settings && st.settings.skipOutro === undefined && st.settings.skipCredits) S.settings.skipOutro = 'auto';
+    }
+  } catch {}
   // On Android the phone owns the volume. Start from the real media level
   // instead of forcing a stored desktop preference onto the device.
   if (NATIVE) {
@@ -4156,6 +4916,7 @@ addEventListener('pagehide', () => { flushUndo(); flushListening(); api('/api/st
   if (!SORT_KEYS.some(([k]) => k === S.settings.plSort)) S.settings.plSort = 'added';
   if (!['list', 'grid'].includes(S.settings.plView)) S.settings.plView = 'list';
   if (!WLViz.has(S.settings.vizStyle)) S.settings.vizStyle = 'matrix';
+  if (!Array.isArray(S.settings.vizHidden)) S.settings.vizHidden = [];
   if (!S.overrides || typeof S.overrides !== 'object' || Array.isArray(S.overrides)) S.overrides = {};
   if (!SPEEDS.includes(+S.settings.speed)) S.settings.speed = 1;
   if (typeof S.settings.swipeRows !== 'boolean') S.settings.swipeRows = true;
@@ -4165,8 +4926,10 @@ addEventListener('pagehide', () => { flushUndo(); flushListening(); api('/api/st
   if (!['best', 'saver'].includes(S.settings.streamQuality)) S.settings.streamQuality = 'best';
   if (!NATIVE && !/Electron/.test(navigator.userAgent) && 'serviceWorker' in navigator && (location.protocol === 'https:' || ['127.0.0.1', 'localhost'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
   applyTheme(); applyMotion(); applyReading(); applyVol(); drawSide(); renderQueue(); updateTransport(); syncSleep(); vizSync(); updateSearchClear(); syncNativePrefs(); watchAudioOutputs();
-  ovApplyAll(); applySpeed(); WLMotion.parallax($('#main'), () => $('#view .ph'));
-  await refreshHealth(); await route(); restoreSession(); localLoad(); syncLoad(); syncPoll();
+  applyScrollbar(); applyLayout(); applyDots(); applyCustomCss(); ovApplyAll(); applySpeed(); WLMotion.parallax($('#main'), () => $('#view .ph'));
+  applyPerf(); applyFeatures(); syncShortcuts();
+  await refreshHealth(); await route(); restoreSession();
+  if (!S.settings.setupDone) { S.settings.setupDone = true; save(); setTimeout(featureSetup, 350); } localLoad(); syncLoad().then(() => syncAutoCheck(true)); syncPoll(); folderLoad();
   booted = true;
   launchQueue.splice(0).forEach(([c, a]) => window.wlLaunch(c, a));
 })();

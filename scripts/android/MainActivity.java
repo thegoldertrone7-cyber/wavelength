@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -257,6 +258,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private final AudioTap audioTap = new AudioTap();
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(code, perms, res);
+        if (code == 8 && wv != null) {
+            final boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+            wv.post(() -> wv.evaluateJavascript("window.wlAudioPerm&&window.wlAudioPerm(" + ok + ")", null));
+        }
+    }
+
+    @Override
+    protected void onPause() { audioTap.stop(); super.onPause(); }
+
     private void buildWebView() {
         wv = new WebView(this);
         wv.setBackgroundColor(0xFF000000);
@@ -270,6 +285,9 @@ public class MainActivity extends AppCompatActivity {
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+        wv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        wv.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         ws.setSupportZoom(false);
         ws.setBuiltInZoomControls(false);
         ws.setUserAgentString(UA);
@@ -413,6 +431,7 @@ public class MainActivity extends AppCompatActivity {
             wv.stopLoading();
             wv.destroy();
         }
+        audioTap.stop();
         io.shutdownNow();
         super.onDestroy();
     }
@@ -487,6 +506,60 @@ public class MainActivity extends AppCompatActivity {
         /* Visualizer and lock-screen preferences are mirrored into native
            storage so the widget and the lock-screen view can read them without
            the page being alive. */
+        /* Real audio for the visualizer. startAudioTap() returns "ok", "denied" (ask with
+           requestAudioPermission) or "unavailable" (device refused). */
+        /* Up to three pinned playlists become long-press launcher shortcuts. */
+        @JavascriptInterface
+        public void setShortcuts(String json) {
+            if (Build.VERSION.SDK_INT < 25) return;
+            try {
+                android.content.pm.ShortcutManager sm = getSystemService(android.content.pm.ShortcutManager.class);
+                if (sm == null) return;
+                org.json.JSONArray arr = new org.json.JSONArray(json == null ? "[]" : json);
+                java.util.List<android.content.pm.ShortcutInfo> list = new java.util.ArrayList<>();
+                int max = Math.min(3, sm.getMaxShortcutCountPerActivity());
+                for (int i = 0; i < arr.length() && list.size() < max; i++) {
+                    org.json.JSONObject o = arr.getJSONObject(i);
+                    String id = o.getString("id"), name = o.optString("name", "Playlist");
+                    Intent it = new Intent(MainActivity.this, MainActivity.class)
+                        .setAction(Intent.ACTION_VIEW)
+                        .putExtra(EXTRA_LAUNCH_ROUTE, "playlist/" + id);
+                    list.add(new android.content.pm.ShortcutInfo.Builder(MainActivity.this, "pl-" + id)
+                        .setShortLabel(name.length() > 10 ? name.substring(0, 10) : name)
+                        .setLongLabel(name)
+                        .setIcon(android.graphics.drawable.Icon.createWithResource(MainActivity.this, R.mipmap.ic_launcher))
+                        .setIntent(it).build());
+                }
+                sm.setDynamicShortcuts(list);
+            } catch (Exception ignored) {}
+        }
+
+        /* Lock-screen layout and look, read by NowPlayingActivity. */
+        @JavascriptInterface
+        public void setLockPrefs(String layout, String theme, boolean controls, int hideMs, boolean hint) {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("lock_layout", layout == null ? "art" : layout)
+                .putString("lock_theme", theme == null ? "accent" : theme)
+                .putBoolean("lock_controls", controls)
+                .putInt("lock_hide_ms", hideMs)
+                .putBoolean("lock_hint", hint)
+                .apply();
+        }
+
+        @JavascriptInterface
+        public String startAudioTap() {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return "denied";
+            return audioTap.start() ? "ok" : "unavailable";
+        }
+        @JavascriptInterface
+        public void stopAudioTap() { audioTap.stop(); }
+        @JavascriptInterface
+        public String readAudioTap() { return audioTap.read(); }
+        @JavascriptInterface
+        public void requestAudioPermission() {
+            runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 8));
+        }
+
         @JavascriptInterface
         public void setVisualizerPrefs(String style, String size, boolean enabled,
                                        boolean lockScreen, String accent) {
@@ -670,6 +743,7 @@ public class MainActivity extends AppCompatActivity {
             throw new Exception("Spotify import is not available in the standalone Android build yet.");
         }
 
+        if ("/api/sync/remote".equals(p)) return syncRemoteNow(body).toString();
         if ("/api/sync/status".equals(p)) return syncStatus().toString();
         if ("/api/sync/join".equals(p)) return syncJoin(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
         if ("/api/sync/pull".equals(p)) return syncPull().toString();
@@ -958,8 +1032,16 @@ public class MainActivity extends AppCompatActivity {
                 if (chapters.length() >= 100) break;
             }
         }
+        String description = "";
+        try {
+            if (si.getDescription() != null && si.getDescription().getContent() != null) {
+                description = si.getDescription().getContent();
+            }
+        } catch (Exception ignored) {}
+        if (description.length() > 6000) description = description.substring(0, 6000);
         String value = new JSONObject()
             .put("duration", Math.max(0, si.getDuration()))
+            .put("description", description)
             .put("chapters", chapters)
             .toString();
         infoCache.put(id, new CacheEntry(value));
@@ -1286,6 +1368,14 @@ public class MainActivity extends AppCompatActivity {
             .put("counts", counts)
             .put("error", "")
             .put("device", Build.MODEL == null ? "Android" : Build.MODEL);
+    }
+
+    private JSONObject syncRemoteNow(String body) throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, ""), code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) {
+            return new JSONObject().put("ok", false).put("devices", new org.json.JSONArray()).put("cmds", new org.json.JSONArray());
+        }
+        return syncFetch(base, code, "POST", "/api/sync/now", body == null || body.isEmpty() ? "{}" : body);
     }
 
     private JSONObject syncJoin(JSONObject input) throws Exception {

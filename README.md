@@ -21,17 +21,17 @@ checksums are in `SHA256SUMS.txt`.
   or `Wavelength-2.4.1-linux-x86_64.flatpak`
 - **Android**: `Wavelength-2.4.1-android.apk`
 
-**Overhaul — 2.5.1.** A separate release built from the `Overhaul` branch, with the same four
-platforms on the [Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.1-overhaul).
-It adds motion v3 (covers that travel between pages, lists that glide, artwork that fades in),
-playback speed, editable song details, twenty visualizer styles with a live gallery, undo and
-filtering across playlists and the queue, a sleep timer and reworked Android widgets and shortcuts.
+**Overhaul — 2.6.0.** A separate release built from the `Overhaul` branch, with the same four
+platforms on the [Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.6.0-overhaul).
+It adds a smart intro/outro skipper, window layouts, 33 more themes with a dotted background and
+custom CSS, synced lyrics, song-editor upgrades and the 2.5.x work (motion v3, playback speed,
+twenty visualizer styles with a live gallery, undo and filtering, queue tools, sleep timer).
 
-- **macOS** (Intel + Apple Silicon): `Wavelength-2.5.1-macos-universal.dmg`
-- **Windows**: `Wavelength-2.5.1-windows-setup.exe`
-- **Linux**: `Wavelength-2.5.1-linux.AppImage`, `Wavelength-2.5.1-linux-arm64.AppImage`
-  or `Wavelength-2.5.1-linux-x86_64.flatpak`
-- **Android**: `Wavelength-2.5.1-android.apk`
+- **macOS** (Intel + Apple Silicon): `Wavelength-2.6.0-macos-universal.dmg`
+- **Windows**: `Wavelength-2.6.0-windows-setup.exe`
+- **Linux**: `Wavelength-2.6.0-linux.AppImage`, `Wavelength-2.6.0-linux-arm64.AppImage`
+  or `Wavelength-2.6.0-linux-x86_64.flatpak`
+- **Android**: `Wavelength-2.6.0-android.apk`
 
 The macOS and Windows builds are unsigned, so the first launch shows the usual warning. Installation
 details, sync steps and limits are in [DOWNLOADS.md](DOWNLOADS.md).
@@ -51,7 +51,7 @@ Build an installable app (run it on the OS you are building for):
     bash scripts/build-flatpak.sh   # -> dist/Wavelength-*-x86_64.flatpak (Linux)
 
 The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`.
-Each release page lists the installation files included; v2.4.1 and the separate Overhaul 2.5.1
+Each release page lists the installation files included; v2.4.1 and the separate Overhaul 2.6.0
 release each ship macOS, Windows, Linux and Android together.
 
 The app is unsigned. First launch on macOS: right-click the app -> Open, or run
@@ -102,6 +102,13 @@ four classic looks (Matrix, Bars, Wave, Radial) for styles it does not have.
 - **Sleep timer** from the full-screen player or **T**, including "After this song".
 - **Touch**: swipe a song right for Play next or left to like it (switch off under Settings →
   Playback); double-tap the left or right of the artwork to skip 10 seconds.
+- **Edit a song's title, artist and thumbnail** from its ••• menu, the **Edit** button in the full-screen
+  player, or **E**. The change shows everywhere that song appears on this device, you can restore the
+  original at any time, and it has an Undo. Thumbnails can be uploaded or pasted as a link.
+- **Playback speed** (0.75×–2×) from the full-screen player, or `[` and `]`.
+- **More by this artist** and **Duplicate playlist** in the menus.
+- **Smoother motion:** covers and the player artwork travel between screens, lists glide when sorted,
+  filtered or reordered, the nav highlight slides, and the seek bar moves every frame.
 - Home shows **Resume**, **Play liked** and **Smart shuffle** shortcuts.
 - `?` opens the shortcut sheet (it used to focus search instead).
 
@@ -234,3 +241,18 @@ Browser mode: ./data.  Desktop app: the app's user-data folder.  Local lossless 
 ## Note
 
 Streaming and downloading from YouTube is against YouTube's terms. Personal use only.
+
+## New in this version
+
+- **Smart intro/outro skipper** (Settings → Playback; all Off by default): chapters, description timestamps, SponsorBlock data and ffmpeg silence detection, merged with confidence scores. Off / Skip button / Automatic per intros, outros and breaks, Undo, learns from rewinds, seek-bar marks, **K** to skip. Unit tests: `node --test tests/skipper.test.js`.
+- **Layouts** (Settings → Appearance → Layout): sidebar left/right/top/rail/hidden, player bottom/top/floating, centred content, 8 presets with previews. Wide windows only.
+- **33 more themes** (`public/js/themes.js`; regenerate CSS with `node scripts/gen-themes.js`), **dotted background** with opacity and spacing, **custom CSS** box.
+- **Lyrics** from LRCLIB (**Y** in the full-screen player), synced with tap-to-seek, looked up only when opened.
+- **Spotify image** button in the song editor, **Enter** confirms song edits, rounded **scrollbars** (Settings → Motion & sound).
+
+## Not finished (planned, not built)
+
+- Opening screen to choose features, plus the "Features" restore section at the bottom of Settings.
+- Hide/remove individual visualizer styles.
+- Android: pin a playlist to the home screen, lock-screen hierarchy, and extra Android lag work (e.g. lighter blur). Android code in this version is untested (no APK build here).
+- Discord support, daily/cross-device sync features, and a Rust rewrite.

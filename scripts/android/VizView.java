@@ -32,7 +32,6 @@ public class VizView extends View {
 
     public VizView(Context context) {
         super(context);
-        setLayerType(LAYER_TYPE_SOFTWARE, null);
     }
 
     public VizView(Context context, AttributeSet attrs) {

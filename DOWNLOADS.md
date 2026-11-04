@@ -3,44 +3,42 @@
 Two builds are published side by side.
 
 - **Latest stable: v2.4.1** — [Wavelength 2.4.1 for macOS, Windows, Linux and Android](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.4.1).
-- **Overhaul: 2.5.1** — [Wavelength Overhaul (2.5.1)](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.1-overhaul),
+- **Overhaul: 2.6.0** — [Wavelength Overhaul (2.6.0)](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.6.0-overhaul),
   built from the `Overhaul` branch. It is a separate release and does not replace v2.4.1.
-  The earlier [Overhaul 2.5.0](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.0-overhaul)
-  release remains available.
+  The earlier [Overhaul 2.5.1](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.1-overhaul)
+  and [Overhaul 2.5.0](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.0-overhaul)
+  releases remain available.
 
-## Overhaul 2.5.1
+## Overhaul 2.6.0
 
-Motion v3 makes the app move as one object: page changes crossfade while covers travel between
-pages, the mini player's artwork grows into the full-screen player, lists glide when sorted,
-filtered, shuffled or reordered, the nav highlight slides as a single pill, the seek bar updates
-every frame and artwork fades in as it loads. This release also adds playback speed (0.75× to 2×),
-editable song details (title, artist and artwork, with undo and restore), and an Android fix that
-decodes artwork chosen in the app for the lock screen, notification and widget.
+The 2.6.0 build adds a **smart intro/outro skipper** (chapters, description timestamps,
+SponsorBlock data and ffmpeg silence detection merged with confidence scores; Off, Skip button or
+Automatic per intros, outros and breaks, with Undo and seek-bar marks), **window layouts** (sidebar
+left/right/top/rail/hidden, player bottom/top/floating, centred content and eight presets),
+**33 more themes** with a dotted background and a custom CSS box, **synced lyrics** from LRCLIB,
+and song-editor upgrades including a Spotify image button and Enter to save.
 
-It includes everything from Overhaul 2.5.0: twenty visualizer styles with a live gallery, undo and
-filtering across playlists and the queue, queue drag-reordering with **Mix** and **Save**, a sleep
-timer, touch shortcuts, and taller Android widgets with progress, a like action and launcher
-shortcuts. Every installer and the APK are 2.5.1.
+It also includes everything from the 2.5.x Overhaul builds: motion v3 (travelling covers, gliding
+lists and highlights, artwork fades), playback speed, editable song title/artist/artwork, twenty
+visualizer styles with a live gallery, undo and filtering across playlists and the queue, queue
+drag-reordering with **Mix** and **Save**, a sleep timer, touch shortcuts, and taller Android
+widgets with progress, a like action and launcher shortcuts. The app icon is the new Wavelength
+mark. Every installer and the APK are 2.6.0.
 
 | Platform | File | Notes |
 | --- | --- | --- |
-| macOS (Intel + Apple Silicon) | `Wavelength-2.5.1-macos-universal.dmg` | Unsigned; right-click → Open |
-| Windows 10/11 | `Wavelength-2.5.1-windows-setup.exe` | NSIS installer, unsigned |
-| Linux x64 | `Wavelength-2.5.1-linux.AppImage` | Needs `yt-dlp` and `ffmpeg` |
-| Linux arm64 | `Wavelength-2.5.1-linux-arm64.AppImage` | Needs `yt-dlp` and `ffmpeg` |
-| Linux | `Wavelength-2.5.1-linux-x86_64.flatpak` | Bundles `yt-dlp`, `ffmpeg`, `ffprobe` |
-| Android | `Wavelength-2.5.1-android.apk` | Debug-signed, direct install |
+| macOS (Intel + Apple Silicon) | `Wavelength-2.6.0-macos-universal.dmg` | Unsigned; right-click → Open |
+| Windows 10/11 | `Wavelength-2.6.0-windows-setup.exe` | NSIS installer, unsigned |
+| Linux x64 | `Wavelength-2.6.0-linux.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux arm64 | `Wavelength-2.6.0-linux-arm64.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux | `Wavelength-2.6.0-linux-x86_64.flatpak` | Bundles `yt-dlp`, `ffmpeg`, `ffprobe` |
+| Android | `Wavelength-2.6.0-android.apk` | Debug-signed, direct install |
 
 `SHA256SUMS.txt` lists the checksum for every file. The Android APK checksum is also published as
-`Wavelength-2.5.1-android.apk.sha256`.
+`Wavelength-2.6.0-android.apk.sha256`.
 
 ```
-473424d645c7c3625f264cb370b03bbfc49574af6b29bc1f1855785066545420  Wavelength-2.5.1-android.apk
-d32a13976bf884b1e93cedc33feb2833b3cf40dd5f178cb4b67fcee67865fad0  Wavelength-2.5.1-linux-arm64.AppImage
-275b8128bc8edc221a022d119ba5df10b7c1e3fe67f6c22d8b7c0c8db92cb9a9  Wavelength-2.5.1-linux-x86_64.flatpak
-e298b266f9762a81b3a36c24afb4b4c54173bcf66ca20c82c8cb0943f231515e  Wavelength-2.5.1-linux.AppImage
-3206d0d78cc680267cfadbac131dd111258bd865117da711ccc87d39c9d5a3f9  Wavelength-2.5.1-macos-universal.dmg
-e28672fdaddca5b111ba536ea8b8ac2d3cca2bf6f505c27c31a33dd60513b4a2  Wavelength-2.5.1-windows-setup.exe
+__OVERHAUL_SUMS__
 ```
 
 ## Stable: v2.4.1
@@ -85,8 +83,8 @@ still needed for YouTube playback.
 3. Search YouTube, play songs and build playlists on the phone. The library is stored in the app
    and survives with the computer off.
 
-The APKs are debug-signed for direct installation; they are not Play Store builds. v2.5.1 uses the
-same signing key as v2.5.0, v2.4.1, v2.4.0, v2.3.0, v2.2.5 and v2.2.6, so any of them installs over
+The APKs are debug-signed for direct installation; they are not Play Store builds. v2.6.0 uses the
+same signing key as v2.5.1, v2.5.0, v2.4.1, v2.4.0, v2.3.0, v2.2.5 and v2.2.6, so any of them installs over
 the others and keeps your library. If you are still on v2.2.4 or older, uninstall that app first
 because it was signed with a different debug key. After installing, you can pull the library from
 the desktop host in **Settings → Devices**.
@@ -151,12 +149,12 @@ them on YouTube.
 
 The instructions are the same for both releases; substitute the version you downloaded.
 
-- **macOS**: `Wavelength-2.5.1-macos-universal.dmg` or `Wavelength-2.4.1-macos-universal.dmg`
+- **macOS**: `Wavelength-2.6.0-macos-universal.dmg` or `Wavelength-2.4.1-macos-universal.dmg`
   (Intel + Apple Silicon). The builds are unsigned; right-click → Open, or run
   `xattr -cr /Applications/Wavelength.app`.
-- **Windows**: `Wavelength-2.5.1-windows-setup.exe` or `Wavelength-2.4.1-windows-setup.exe` NSIS
+- **Windows**: `Wavelength-2.6.0-windows-setup.exe` or `Wavelength-2.4.1-windows-setup.exe` NSIS
   installers. They are unsigned, so SmartScreen may ask for "More info → Run anyway".
-- **Linux**: `Wavelength-2.5.1-linux.AppImage` (x64), `Wavelength-2.5.1-linux-arm64.AppImage`
-  (arm64) or `Wavelength-2.5.1-linux-x86_64.flatpak`; v2.4.1 uses the same names with `2.4.1`.
+- **Linux**: `Wavelength-2.6.0-linux.AppImage` (x64), `Wavelength-2.6.0-linux-arm64.AppImage`
+  (arm64) or `Wavelength-2.6.0-linux-x86_64.flatpak`; v2.4.1 uses the same names with `2.4.1`.
   The AppImages need `yt-dlp` and `ffmpeg` installed; the Flatpak bundles both. Make the AppImage
-  executable with `chmod +x Wavelength-2.5.1-linux.AppImage`, then run it.
+  executable with `chmod +x Wavelength-2.6.0-linux.AppImage`, then run it.

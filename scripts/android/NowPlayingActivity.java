@@ -37,7 +37,10 @@ import java.util.Locale;
  * then fades out on its own so unlocking still lands on the normal lock screen.
  */
 public class NowPlayingActivity extends Activity {
-    private static final long HIDE_AFTER_MS = 9000;
+    private long hideAfter = 9000;
+    private boolean artHidden = false;
+    private View scrim;
+    private LinearLayout controlsRow;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -93,9 +96,10 @@ public class NowPlayingActivity extends Activity {
 
         root = buildUi();
         setContentView(root);
+        applyLayout();
         apply(PlaybackService.snapshot(this));
         handler.post(tick);
-        handler.postDelayed(hide, HIDE_AFTER_MS);
+        if (hideAfter > 0) handler.postDelayed(hide, hideAfter);
     }
 
     @Override
@@ -121,7 +125,7 @@ public class NowPlayingActivity extends Activity {
     private void bump() {
         if (hiding) return;
         handler.removeCallbacks(hide);
-        handler.postDelayed(hide, HIDE_AFTER_MS);
+        if (hideAfter > 0) handler.postDelayed(hide, hideAfter);
     }
 
     private void apply(PlaybackService.Snapshot s) {
@@ -149,7 +153,7 @@ public class NowPlayingActivity extends Activity {
             if (bitmap != null) {
                 art.setImageBitmap(round(bitmap, 512));
                 backdrop.setImageBitmap(soften(bitmap));
-                art.setVisibility(View.VISIBLE);
+                art.setVisibility(artHidden ? View.GONE : View.VISIBLE);
                 appliedArt = true;
             } else if (changed) {
                 art.setImageResource(R.mipmap.ic_launcher);
@@ -166,6 +170,25 @@ public class NowPlayingActivity extends Activity {
         progress.setProgress(dur > 0 ? (int) Math.min(1000, pos * 1000 / dur) : 0);
         elapsed.setText(clock(pos));
         total.setText(dur > 0 ? clock(dur) : "--:--");
+    }
+
+    /* Layout, look and timing chosen in Settings → Lock screen. */
+    private void applyLayout() {
+        SharedPreferences p = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+        String layout = p.getString("lock_layout", "art"), theme = p.getString("lock_theme", "accent");
+        hideAfter = p.getInt("lock_hide_ms", 9000);
+        controlsRow.setVisibility(p.getBoolean("lock_controls", true) ? View.VISIBLE : View.GONE);
+        hint.setVisibility(p.getBoolean("lock_hint", true) && hideAfter > 0 ? View.VISIBLE : View.GONE);
+        int artDp = 196; float titleSp = 24;
+        if ("compact".equals(layout)) { artDp = 112; titleSp = 20; }
+        else if ("viz".equals(layout)) { artDp = 72; titleSp = 18; scrim.setAlpha(0.45f); }
+        else if ("minimal".equals(layout)) { artDp = 0; titleSp = 32; }
+        artHidden = artDp == 0;
+        if (artHidden) art.setVisibility(View.GONE);
+        else { ViewGroup.LayoutParams lp = art.getLayoutParams(); lp.width = dp(artDp); lp.height = dp(artDp); art.setLayoutParams(lp); }
+        title.setTextSize(titleSp);
+        if ("amoled".equals(theme)) { backdrop.setVisibility(View.GONE); scrim.setBackgroundColor(Color.BLACK); }
+        else if ("album".equals(theme)) { backdrop.setAlpha(0.9f); scrim.setAlpha(Math.min(scrim.getAlpha(), 0.55f)); }
     }
 
     private static String clock(long ms) {
@@ -224,7 +247,7 @@ public class NowPlayingActivity extends Activity {
         backdrop.setAlpha(0.5f);
         frame.addView(backdrop, new FrameLayout.LayoutParams(-1, -1));
 
-        View scrim = new View(this);
+        scrim = new View(this);
         GradientDrawable gradient = new GradientDrawable(
             GradientDrawable.Orientation.BOTTOM_TOP,
             new int[]{0xF2000000, 0x99000000, 0xCC000000});
@@ -298,7 +321,8 @@ public class NowPlayingActivity extends Activity {
         times.addView(total, side2);
         column.addView(times);
 
-        LinearLayout controls = new LinearLayout(this);
+        controlsRow = new LinearLayout(this);
+        LinearLayout controls = controlsRow;
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams ctlParams = new LinearLayout.LayoutParams(-1, -2);
