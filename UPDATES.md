@@ -14,7 +14,8 @@ the next launch quietly goes back to the version that came with the installer.
    - The **public** key is written to `update-pubkey.pem` in the repo root. Commit it. It is embedded in
      every installer and in the Android APK.
 2. Build and publish new installers and the APK **once**. They now contain the public key, and
-   Settings → Updates stops saying "Updates are not set up in this build".
+   Settings → Updates stops saying "Updates are not set up in this build". **Overhaul 2.7.2** is the
+   first build with the key; 2.7.1 and earlier need that installer once.
 
 There is no account or external service: the key pair is generated locally and only the public half is
 published.
@@ -65,8 +66,9 @@ Apps older than that show "Get installer" instead of installing the bundle.
 
 ## Limits
 
-- Installed versions that were built before this feature (or without `update-pubkey.pem`) cannot update
-  themselves. They need one last installer; after that updates are in-app.
+- Installed versions that were built before this feature (or without `update-pubkey.pem`), including
+  2.7.1 and earlier, cannot update themselves. They need one last installer; after that updates are
+  in-app.
 - Anything inside the native shell (`electron/`, `scripts/android/*.java`, permissions) still ships through
   an installer.
 - Android applies an update after you tap Restart in Settings → Updates (the page reloads); desktop
