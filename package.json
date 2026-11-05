@@ -1,7 +1,7 @@
 {
   "name": "wavelength",
   "productName": "Wavelength",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "description": "Free, ad-free music app: import Spotify links, play via YouTube, download MP3s.",
   "author": "Wavelength",
   "private": true,
@@ -35,6 +35,7 @@
       "electron/**/*",
       "!**/*.bak",
       "build/icon.png",
+      "build/icon-mac.png",
       "package.json"
     ],
     "extraResources": [
@@ -49,7 +50,7 @@
     },
     "mac": {
       "category": "public.app-category.music",
-      "icon": "build/icon.png"
+      "icon": "build/icon-mac.png"
     },
     "win": {
       "icon": "build/icon.png"

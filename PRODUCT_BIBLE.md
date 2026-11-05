@@ -10,15 +10,15 @@
 
 | Build | Version | Notes |
 | --- | --- | --- |
-| Android APK | **v2.4.1** stable · **2.7.0** Overhaul | Standalone, debug-signed, direct install |
-| Published desktop installers | **v2.4.1** stable · **2.7.0** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
+| Android APK | **v2.4.1** stable · **2.7.1** Overhaul | Standalone, debug-signed, direct install |
+| Published desktop installers | **v2.4.1** stable · **2.7.1** Overhaul | macOS universal, Windows NSIS, Linux AppImage / Flatpak |
 | Source / browser mode | **v2.4.1** stable · **Overhaul** branch | Runs through the bundled Node server |
 
 `v2.4.1` ships every platform: macOS universal DMG, Windows installer, Linux AppImage (x64 and
 arm64), Flatpak and the Android APK. The desktop builds are unsigned. It adds **Find devices**,
 Android **Smart volume** and the full-screen volume meter. A second, separate release —
-**Overhaul 2.7.0**, built from the `Overhaul` branch — ships the same platforms with in-app
-updates, plus the smart intro/outro skipper, window layouts, extra themes, lyrics and song-editor
+**Overhaul 2.7.1**, built from the `Overhaul` branch — ships the same platforms with a macOS-only
+squared app icon, in-app updates, plus the smart intro/outro skipper, window layouts, extra themes, lyrics and song-editor
 upgrades, and the motion, visualizer, queue and Android work described in §11.1. This document describes shipped behaviour first and
 future direction second.
 Anything outside the **Shipped** sections is a plan, not a promise.
@@ -1107,6 +1107,12 @@ cloud product.
   the native shell back through an installer. Builds produced without a signing key report that
   updates are not set up; the key setup and release steps are in `UPDATES.md`.
 
+**Shipped in Overhaul 2.7.1**
+
+- **macOS-only squared app icon.** The macOS app bundle and Dock use
+  `build/icon-mac.png` (the squared Wavelength mark). Windows, Linux, the Flatpak, Android and the
+  web app keep `build/icon.png`, so the desktop icon is unchanged on those platforms.
+
 ### 11.2 Not in this build
 
 | Item | Status | Notes |
@@ -1151,7 +1157,7 @@ These are repeated in the interface and should remain true in every future relea
 6. **Android needs the internet for playback.** Offline downloads are not in this build.
 7. **Desktop LAN access is for trusted networks.** The app header and pairing code are not
    encryption; use trusted Wi-Fi or Tailscale.
-8. **The stable installers are all v2.4.1; Overhaul is a separate 2.7.0 release.** The desktop
+8. **The stable installers are all v2.4.1; Overhaul is a separate 2.7.1 release.** The desktop
    builds are unsigned, so macOS and Windows show the usual first-launch warnings.
 9. **The app is free, but YouTube's terms still apply.** Personal use only.
 10. **No account and no telemetry.** Wavelength itself ships no analytics or central account
@@ -1190,7 +1196,9 @@ These are repeated in the interface and should remain true in every future relea
   everything from 2.5.1 and ships on the same four platforms.
 - **Overhaul 2.7.0** — in-app updates with signed bundles, automatic rollback and installer
   fallback for native changes. Includes everything from 2.6.0 and ships on the same four platforms.
-- The latest stable release remains **v2.4.1**; Overhaul 2.7.0 is published beside it and is not
+- **Overhaul 2.7.1** — macOS-only squared app icon; every other platform keeps the current icon.
+  Includes everything from 2.7.0 and ships on the same four platforms.
+- The latest stable release remains **v2.4.1**; Overhaul 2.7.1 is published beside it and is not
   marked latest.
 
 ### 12.2 Phase 1 — Stabilise the instrument

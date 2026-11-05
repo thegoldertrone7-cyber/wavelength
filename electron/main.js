@@ -81,7 +81,7 @@ app.whenReady().then(async () => {
 
   // Set dock icon (macOS)
   if (process.platform === 'darwin' && app.dock) {
-    try { app.dock.setIcon(path.join(__dirname, '..', 'build', 'icon.png')); } catch {}
+    try { app.dock.setIcon(path.join(__dirname, '..', 'build', 'icon-mac.png')); } catch {}
   }
 
   // Content-Security-Policy: allow the local server plus Google Fonts and
