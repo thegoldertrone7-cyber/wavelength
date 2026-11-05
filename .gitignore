@@ -8,6 +8,7 @@ node_modules/
 data/
 backups/
 dist/
+dist-update/
 android-app/
 flatpak/
 flatpak-build/

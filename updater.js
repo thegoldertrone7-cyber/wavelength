@@ -10,7 +10,14 @@ const fs = require('fs'), path = require('path'), os = require('os'), zlib = req
 
 const BASE = __dirname;
 const REPO = 'thegoldertrone7-cyber/wavelength';
-const MANIFEST_URL = process.env.WAVELENGTH_UPDATE_URL || `https://github.com/${REPO}/releases/latest/download/update.json`;
+/* Overhaul builds follow their own channel so they never read the stable release. `overhaul-updates`
+   is a permanent release whose update.json asset is replaced on every Overhaul release. Set
+   WAVELENGTH_UPDATE_CHANNEL=latest to follow releases/latest/download instead, or point
+   WAVELENGTH_UPDATE_URL at any manifest (used by the tests). */
+const CHANNEL = process.env.WAVELENGTH_UPDATE_CHANNEL || 'overhaul-updates';
+const MANIFEST_URL = process.env.WAVELENGTH_UPDATE_URL || (CHANNEL === 'latest'
+  ? `https://github.com/${REPO}/releases/latest/download/update.json`
+  : `https://github.com/${REPO}/releases/download/${CHANNEL}/update.json`);
 const UPDATES = () => process.env.WAVELENGTH_UPDATES || path.join(process.env.WAVELENGTH_DATA || path.join(BASE, 'data'), '..', 'updates');
 const MAX_BYTES = 60 * 1024 * 1024;
 

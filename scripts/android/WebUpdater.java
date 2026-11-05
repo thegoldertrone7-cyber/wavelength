@@ -24,7 +24,8 @@ import java.util.zip.GZIPInputStream;
    storage. It is used in place of the packaged files at the next start. If the page never confirms
    a successful start, the next launch drops the update and goes back to the packaged files. */
 final class WebUpdater {
-    static final String MANIFEST = "https://github.com/thegoldertrone7-cyber/wavelength/releases/latest/download/update.json";
+    // Overhaul builds follow their own channel release, never the stable `latest` channel.
+    static final String MANIFEST = "https://github.com/thegoldertrone7-cyber/wavelength/releases/download/overhaul-updates/update.json";
     private static final int MAX = 60 * 1024 * 1024;
     private final Context ctx;
     private final File root;
