@@ -39,7 +39,12 @@ is described in [UPDATES.md](UPDATES.md).
 `Wavelength-2.7.1-android.apk.sha256`.
 
 ```
-__OVERHAUL_SUMS__
+2161c6a90131b27de14315078266710dd549eb04a5f36b903de8cac726cdbf7d  Wavelength-2.7.1-android.apk
+81afd814b0c4a9066e48285df0b1f4d97b8f0518f7f0b0715c00c65aca573829  Wavelength-2.7.1-linux-arm64.AppImage
+65107385508bd9a9d3d2355b8361003421e26966bb07a5c3e1649fccfd45b9c7  Wavelength-2.7.1-linux-x86_64.flatpak
+b978d11265a86ac7b6b4a829657c4cfefd5005975e2b54a46aa3cdf9a957e039  Wavelength-2.7.1-linux.AppImage
+9cc1030695afd0b8e1684a9f588df9cc66c763cc1a95a76854e3301c826e8ee9  Wavelength-2.7.1-macos-universal.dmg
+9f8e8c2260ef126b7ee00519757ee3f018e16c6193dc197026a63bd587073863  Wavelength-2.7.1-windows-setup.exe
 ```
 
 ## Overhaul 2.7.0
