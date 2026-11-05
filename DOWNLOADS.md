@@ -38,7 +38,12 @@ the APK are 2.7.0.
 `Wavelength-2.7.0-android.apk.sha256`.
 
 ```
-__OVERHAUL_SUMS__
+9f82ccad9972601c01ccd887aaa262b6dcfdbb957c099a1ae22cd475780e3800  Wavelength-2.7.0-android.apk
+604fb55bd6b180179bbd804f3e7beec4f5c895852bc6dad0dad7398c0e7c03b4  Wavelength-2.7.0-linux-arm64.AppImage
+3468ec7abbd7167d455e6b60d6476a7e03514ad97040899ff8b56bb631f3b8ef  Wavelength-2.7.0-linux-x86_64.flatpak
+95c504a518e2f99be7f78fd39c454ee3c217643467d310757282d753ab724388  Wavelength-2.7.0-linux.AppImage
+b8d5d1329a931ec1a98c90b8c32a6109b90fe06096f5b3beed565e451adf3797  Wavelength-2.7.0-macos-universal.dmg
+5b1ba0af47bca13e0f969e8d194654e7721fe72f82755aa79bf1553be6434e13  Wavelength-2.7.0-windows-setup.exe
 ```
 
 ## Overhaul 2.6.0
