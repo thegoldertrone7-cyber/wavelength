@@ -39,7 +39,12 @@ the key, so install 2.7.2 once.
 `Wavelength-2.7.2-android.apk.sha256`.
 
 ```
-__OVERHAUL_SUMS__
+37899c57fd387c73f5c1c4a9b2b1c717b8672259f9af4dcf5ae14b05801d56e3  Wavelength-2.7.2-android.apk
+a39284a5d6fe5c7f4c17d8f3caff9fbc64a8cb48f5fb387d36d6e5aef2799512  Wavelength-2.7.2-linux-arm64.AppImage
+d5b98eb9d2777f1bf23ace2afc1ade5f3d34fbc5d2039346cd4a5a6faecc179b  Wavelength-2.7.2-linux-x86_64.flatpak
+ea1d9d9c5f3af03cc16c2676941fa72473c7adf615c5ab01b6339b7c01c069df  Wavelength-2.7.2-linux.AppImage
+9991f27eee95b476e51c2f749530f1e6b61fa3d6bc522bdb2ea8a8f185f081c2  Wavelength-2.7.2-macos-universal.dmg
+05b0dc0095456741763fd202e5854796e45c4594c16919baa9a6e90b8199698b  Wavelength-2.7.2-windows-setup.exe
 ```
 
 ## Overhaul 2.7.1
