@@ -4,6 +4,9 @@ node_modules/
 # local config (Spotify client ID, etc.)
 .env
 
+# never commit the update signing key (the public key, update-pubkey.pem, is tracked)
+update-private.pem
+
 # runtime data, caches and build output
 data/
 backups/
