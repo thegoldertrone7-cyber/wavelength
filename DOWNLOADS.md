@@ -3,14 +3,48 @@
 Two builds are published side by side.
 
 - **Latest stable: v2.4.1** — [Wavelength 2.4.1 for macOS, Windows, Linux and Android](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.4.1).
-- **Overhaul: 2.7.2** — [Wavelength Overhaul (2.7.2)](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.2-overhaul),
+- **Overhaul: 2.7.3** — [Wavelength Overhaul (2.7.3)](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.3-overhaul),
   built from the `Overhaul` branch. It is a separate release and does not replace v2.4.1.
-  The earlier [Overhaul 2.7.1](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.1-overhaul),
+  The earlier [Overhaul 2.7.2](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.2-overhaul),
+  [Overhaul 2.7.1](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.1-overhaul),
   [Overhaul 2.7.0](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.0-overhaul),
   [Overhaul 2.6.0](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.6.0-overhaul),
   [Overhaul 2.5.1](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.1-overhaul)
   and [Overhaul 2.5.0](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.5.0-overhaul)
   releases remain available.
+
+## Overhaul 2.7.3
+
+The 2.7.3 build makes **listening recaps device-independent**. Plays counted on a paired phone now
+appear in the computer's recap: each device's listening snapshot syncs on its own, merges with a
+weighted tie-break, and keeps full millisecond timestamps, so an older copy can no longer overwrite a
+newer one. It also fixes signed update bundles on Android — 2.7.2 extracted only `public/`, so its
+version check failed because `package.json` was missing.
+
+This release ships **macOS, Linux and Android installers**. Windows and Flatpak installers were not
+rebuilt and the Minecraft mod is not part of this release. 2.7.2 installs on Windows, Linux
+(AppImage and Flatpak) and macOS receive 2.7.3 through **Settings → Updates**; the signed bundle
+updates the interface and player in place.
+
+Android 2.7.2 cannot apply the bundle because of the bug above, so install the **2.7.3 APK once**.
+It uses the same debug certificate as 2.7.2 and installs directly over it without uninstalling.
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Intel + Apple Silicon) | `Wavelength-2.7.3-macos-universal.dmg` | Squared icon; unsigned, right-click → Open |
+| Linux x64 | `Wavelength-2.7.3-linux.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Linux arm64 | `Wavelength-2.7.3-linux-arm64.AppImage` | Needs `yt-dlp` and `ffmpeg` |
+| Android | `Wavelength-2.7.3-android.apk` | Debug-signed, direct install |
+
+`SHA256SUMS.txt` lists the checksum for every file. The Android APK checksum is also published as
+`Wavelength-2.7.3-android.apk.sha256`.
+
+```
+0b584c64640f60d21ea39355a34cf16c03bcf27c8bef2abb093ac4be89d1272d  Wavelength-2.7.3-android.apk
+2005b3af47a057fc7aec29901bebc3e32906e15c7fb9b7c596d98ff6e1147432  Wavelength-2.7.3-linux-arm64.AppImage
+1f53d52575367a9363f9b7b2009d90cbfe3ed19f7b79289d4fcdd839a5a5a62f  Wavelength-2.7.3-linux.AppImage
+503318bd5f31a7ed64f96d92af1b55b14d78e8bd935438c28045cb5fe2655686  Wavelength-2.7.3-macos-universal.dmg
+```
 
 ## Overhaul 2.7.2
 
