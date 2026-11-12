@@ -207,6 +207,31 @@ function syncAutoCheck(opening) {
   if (S.settings.syncDaily && Date.now() - (+S.settings.syncLast || 0) > 864e5) return autoSync();
 }
 setInterval(() => syncAutoCheck(false), 36e5);
+/* Listening stats are small, so they sync on their own while this device is
+   paired — no need to wait for a full library merge. The phone's snapshot
+   reaches the host, and the host's combined recap comes back here. */
+let listenSyncBusy = false, listenSyncSig = '';
+const ownListenSig = () => {
+  try { return JSON.stringify((S.listening && S.listening.devices && S.listening.devices[deviceId()]) || null); }
+  catch { return ''; }
+};
+async function syncListeningNow(force = false) {
+  if (listenSyncBusy || !R.sync || R.sync.role !== 'guest' || !R.sync.hostUrl) return false;
+  const own = S.listening && S.listening.devices && S.listening.devices[deviceId()];
+  if (!own) return false;
+  if (!force && ownListenSig() === listenSyncSig) return false;
+  listenSyncBusy = true;
+  try {
+    await api('/api/sync/listening', { method: 'POST', json: { listening: { v: 1, devices: { [deviceId()]: own } }, device: remoteDeviceName() } });
+    const st = await api('/api/state').catch(() => null);
+    if (st && st.listening && st.listening.devices) S.listening = st.listening;
+    listenSyncSig = ownListenSig();
+    if (curRoute === 'recap') draw();
+    return true;
+  } catch { return false; }
+  finally { listenSyncBusy = false; }
+}
+setInterval(() => syncListeningNow(false), 60000);
 const npSnapshot = () => R.cur ? { title: R.cur.title || '', artist: R.cur.artist || '', art: /^https?:/.test(R.cur.art || '') ? R.cur.art : '', playing: !!R.playing, pos: Math.round(audio.currentTime || 0), dur: Math.round(isFinite(audio.duration) ? audio.duration : (R.cur.duration || 0)) } : null;
 async function remoteTick(cmd) {
   if (remoteBusy || !R.sync || R.sync.role === 'off') return;
@@ -253,6 +278,7 @@ function syncExtras() {
     <details class="sg" open><summary>Automatic sync</summary>
       ${tgl('syncOnOpen', 'Sync when Wavelength opens', 'Merges with the host each time the app starts. Additive: nothing is removed.')}
       ${tgl('syncDaily', 'Daily sync', `Merges once a day while the app is open. ${S.settings.syncLast ? 'Last automatic sync ' + esc(new Date(S.settings.syncLast).toLocaleString()) + '.' : 'Has not run yet.'}`)}
+      ${R.sync && R.sync.role === 'guest' ? '<p class="meta sync-note">Listening recap statistics sync automatically while this device is paired — even with both options off — so plays here appear in the other device\'s recap. Keep the host open to receive them.</p>' : ''}
       ${S.settings.syncOnOpen || S.settings.syncDaily ? '<p class="meta sync-note">Automatic sync only works while paired as a guest. Listening recap statistics are merged per device along with your library.</p>' : ''}
     </details>
     <details class="sg"><summary>Control other devices</summary>
@@ -486,6 +512,7 @@ function startListening() {
 function flushListening() {
   clearInterval(R.listenTick); R.listenTick = 0;
   if (R.listenDirty) { R.listenDirty = false; api('/api/state', { method: 'PUT', json: S }).catch(() => {}); }
+  syncListeningNow();
 }
 const ctxName = c => {
   if (!c) return '';
@@ -5029,7 +5056,7 @@ new MutationObserver(() => { hideOffSettings(); if ($('#upd-box') && !R.upd) upd
   await refreshHealth(); await route(); restoreSession();
   setTimeout(() => { try { window.AndroidBridge.confirmWebUpdate(); } catch {} }, 3000);
   setTimeout(autoUpdateCheck, 12000);
-  if (!S.settings.setupDone) { S.settings.setupDone = true; save(); setTimeout(featureSetup, 350); } localLoad(); syncLoad().then(() => syncAutoCheck(true)); syncPoll(); folderLoad();
+  if (!S.settings.setupDone) { S.settings.setupDone = true; save(); setTimeout(featureSetup, 350); } localLoad(); syncLoad().then(() => { syncAutoCheck(true); syncListeningNow(); }); syncPoll(); folderLoad();
   booted = true;
   launchQueue.splice(0).forEach(([c, a]) => window.wlLaunch(c, a));
 })();

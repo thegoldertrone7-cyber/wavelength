@@ -764,6 +764,7 @@ public class MainActivity extends AppCompatActivity {
         if ("/api/sync/push".equals(p)) return syncPush().toString();
         if ("/api/sync/merge/preview".equals(p)) return syncMergePreview().toString();
         if ("/api/sync/merge".equals(p)) return syncMerge(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
+        if ("/api/sync/listening".equals(p)) return syncListeningPush(new JSONObject(body == null || body.isEmpty() ? "{}" : body)).toString();
         if ("/api/sync/disconnect".equals(p)) return syncDisconnect().toString();
         if ("/api/sync/host".equals(p)) {
             throw new Exception("Host from the computer, then join it here. Phone hosting is not enabled yet.");
@@ -822,9 +823,23 @@ public class MainActivity extends AppCompatActivity {
 
     private void writeState(String body) throws Exception {
         if (body == null || body.trim().isEmpty()) body = "{}";
-        new JSONObject(body); // validate before replacing the good copy
+        JSONObject incoming = new JSONObject(body); // validate before replacing the good copy
         synchronized (STATE_LOCK) {
-            writeFile(stateFile, body);
+            /* The interface saves its whole state on a timer. Keep listening
+               stats this copy has not seen yet instead of erasing another
+               device's history that arrived through sync. */
+            try {
+                if (stateFile.exists() && incoming.optJSONObject("listening") != null) {
+                    String old = readFile(stateFile);
+                    if (old != null && old.trim().startsWith("{")) {
+                        JSONObject prev = new JSONObject(old);
+                        if (prev.optJSONObject("listening") != null) {
+                            incoming.put("listening", mergeListening(prev.optJSONObject("listening"), incoming.optJSONObject("listening")));
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+            writeFile(stateFile, incoming.toString());
         }
     }
 
@@ -1494,6 +1509,35 @@ public class MainActivity extends AppCompatActivity {
         return syncStatus();
     }
 
+    /* Listening-only sync: tiny payload, so a paired phone can keep the
+       computer's recap current without sending its whole library. */
+    private JSONObject syncListeningPush(JSONObject input) throws Exception {
+        String base = prefs.getString(KEY_SYNC_URL, "");
+        String code = prefs.getString(KEY_SYNC_CODE, "");
+        if (base.isEmpty() || code.isEmpty()) throw new Exception("Connect to a computer first");
+        JSONObject own = input.optJSONObject("listening");
+        if (own == null) {
+            JSONObject state = new JSONObject(readState());
+            own = state.optJSONObject("listening");
+            if (own == null) own = new JSONObject().put("v", 1).put("devices", new JSONObject());
+        }
+        JSONObject payload = new JSONObject()
+            .put("listening", own)
+            .put("device", Build.MODEL == null ? "Android" : Build.MODEL);
+        JSONObject remote = syncFetch(base, code, "PUT", "/api/sync/listening", payload.toString());
+        JSONObject listening = remote.optJSONObject("listening");
+        if (listening != null) {
+            JSONObject state = new JSONObject(readState());
+            state.put("listening", mergeListening(state.optJSONObject("listening"), listening));
+            writeState(state.toString());
+        }
+        prefs.edit()
+            .putLong(KEY_SYNC_LAST, System.currentTimeMillis())
+            .putLong(KEY_SYNC_REV, remote.optLong("rev", 0))
+            .apply();
+        return syncStatus();
+    }
+
     private JSONObject syncDisconnect() throws Exception {
         prefs.edit()
             .remove(KEY_SYNC_URL)
@@ -1617,10 +1661,32 @@ public class MainActivity extends AppCompatActivity {
             JSONObject have = out.optJSONObject(id);
             long at = device.optLong("updatedAt", 0);
             long old = have == null ? -1 : have.optLong("updatedAt", 0);
-            if (have == null || at >= old) {
+            /* Older libraries clamped timestamps to 1e12, so snapshots can
+               look equally recent. Keep the one with more listening time. */
+            if (have == null || at > old || (at == old && listeningWeight(device) >= listeningWeight(have))) {
                 try { out.put(id, device); } catch (Exception ignored) {}
             }
         }
+    }
+
+    private static long listeningWeight(JSONObject device) {
+        long n = 0;
+        try {
+            JSONObject days = device.optJSONObject("days");
+            if (days != null) {
+                Iterator<String> dk = days.keys();
+                while (dk.hasNext()) n += Math.max(0, days.optLong(dk.next(), 0));
+            }
+            JSONObject years = device.optJSONObject("years");
+            if (years != null) {
+                Iterator<String> yk = years.keys();
+                while (yk.hasNext()) {
+                    JSONObject b = years.optJSONObject(yk.next());
+                    if (b != null) n += Math.max(0, b.optLong("seconds", 0)) * 2;
+                }
+            }
+        } catch (Exception ignored) {}
+        return n;
     }
 
     private static String syncBase(String raw) throws Exception {

@@ -69,6 +69,9 @@ Apps older than that show "Get installer" instead of installing the bundle.
 - Installed versions that were built before this feature (or without `update-pubkey.pem`), including
   2.7.1 and earlier, cannot update themselves. They need one last installer; after that updates are
   in-app.
+- Android 2.7.2 extracted only `public/` from the bundle, then failed its own version check because
+  `package.json` was missing. Those installs need the **2.7.3 APK once**; from 2.7.3 onward the
+  Android updater extracts `package.json` too and applies bundles normally.
 - Anything inside the native shell (`electron/`, `scripts/android/*.java`, permissions) still ships through
   an installer.
 - Android applies an update after you tap Restart in Settings → Updates (the page reloads); desktop

@@ -21,26 +21,27 @@ checksums are in `SHA256SUMS.txt`.
   or `Wavelength-2.4.1-linux-x86_64.flatpak`
 - **Android**: `Wavelength-2.4.1-android.apk`
 
-**Overhaul — 2.7.2.** A separate release built from the `Overhaul` branch, with the same four
-platforms on the [Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.2-overhaul).
+**Overhaul — 2.7.3.** A separate release built from the `Overhaul` branch, on the
+[Overhaul release page](https://github.com/thegoldertrone7-cyber/wavelength/releases/tag/v2.7.3-overhaul).
 This is the first build that can **receive in-app updates**: it contains the update signing key and
 reads its own channel, so a signed bundle of the interface and player can update the app without a
 new installer, and a failed update rolls back on the next start. Later updates are published with
 `npm run make:update` and installed from **Settings → Updates**; [UPDATES.md](UPDATES.md) has the
 details. The **macOS build keeps its own squared app icon** in the Dock and app bundle, while
-Windows, Linux, Android, the Flatpak and the web app keep the current Wavelength mark. It includes
-everything from 2.6.0 — the smart intro/outro skipper, window layouts, 33 more themes, synced
-lyrics, song-editor upgrades — and the 2.5.x work (motion v3, playback speed, twenty visualizer
-styles, undo and filtering, queue tools, sleep timer).
+Windows, Linux, Android, the Flatpak and the web app keep the current Wavelength mark. This release
+adds device-independent listening recaps (a phone's plays now show up on the computer) and fixes
+Android bundle installs. It includes everything from 2.6.0 — the smart intro/outro skipper, window
+layouts, 33 more themes, synced lyrics, song-editor upgrades — and the 2.5.x work (motion v3,
+playback speed, twenty visualizer styles, undo and filtering, queue tools, sleep timer).
 
-- **macOS** (Intel + Apple Silicon): `Wavelength-2.7.2-macos-universal.dmg` (squared icon)
-- **Windows**: `Wavelength-2.7.2-windows-setup.exe`
-- **Linux**: `Wavelength-2.7.2-linux.AppImage`, `Wavelength-2.7.2-linux-arm64.AppImage`
-  or `Wavelength-2.7.2-linux-x86_64.flatpak`
-- **Android**: `Wavelength-2.7.2-android.apk`
+- **macOS** (Intel + Apple Silicon): `Wavelength-2.7.3-macos-universal.dmg` (squared icon)
+- **Linux**: `Wavelength-2.7.3-linux.AppImage`, `Wavelength-2.7.3-linux-arm64.AppImage`
+- **Android**: `Wavelength-2.7.3-android.apk`
 
-The macOS and Windows builds are unsigned, so the first launch shows the usual warning. Installation
-details, sync steps and limits are in [DOWNLOADS.md](DOWNLOADS.md).
+Windows and Linux Flatpak installers from 2.7.2 keep working and receive this release through the
+in-app updater; only these three installers were rebuilt. The macOS build is unsigned, so the first
+launch shows the usual warning. Installation details, sync steps and limits are in
+[DOWNLOADS.md](DOWNLOADS.md).
 
 ## Desktop app (macOS / Windows / Linux)
 
@@ -57,8 +58,9 @@ Build an installable app (run it on the OS you are building for):
     bash scripts/build-flatpak.sh   # -> dist/Wavelength-*-x86_64.flatpak (Linux)
 
 The desktop packages and Flatpak are also built by GitHub Actions on every push to `main`.
-Each release page lists the installation files included; v2.4.1 and the separate Overhaul 2.7.2
-release each ship macOS, Windows, Linux and Android together.
+Each release page lists the installation files included; v2.4.1 ships macOS, Windows, Linux and
+Android, while the separate Overhaul releases ship the installers rebuilt for that version (2.7.3
+ships macOS, Linux and Android; Windows and Flatpak update in-app from 2.7.2).
 
 The app is unsigned. First launch on macOS: right-click the app -> Open, or run
 `xattr -cr /Applications/Wavelength.app`.

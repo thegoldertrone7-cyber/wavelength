@@ -203,7 +203,7 @@ final class WebUpdater {
             String size = new String(h, 124, 12, "ASCII").replaceAll("\0.*$", "").trim();
             long len = size.isEmpty() ? 0 : Long.parseLong(size, 8);
             char type = h[156] == 0 ? '0' : (char) h[156];
-            boolean ok = type == '0' && name.startsWith("public/") && !name.contains("..") && !name.startsWith("/");
+            boolean ok = type == '0' && (name.startsWith("public/") || name.equals("package.json")) && !name.contains("..") && !name.startsWith("/");
             File out = ok ? new File(dest, name) : null;
             if (out != null) {
                 if (!out.getCanonicalPath().startsWith(dest.getCanonicalPath() + File.separator)) throw new Exception("Unsafe path in update");

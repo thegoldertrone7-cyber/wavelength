@@ -1555,6 +1555,10 @@ const syncCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').sl
 const newSyncCode = () => crypto.randomBytes(4).toString('hex').toUpperCase();
 const syncList = (v, max) => Array.isArray(v) ? v.filter(x => x && typeof x === 'object').slice(0, max) : [];
 const syncNum = v => Math.max(0, Math.min(1e12, Math.round(+v || 0)));
+/* Timestamps are milliseconds since 1970 and are already past 1e12, so they
+   need their own range. Clamping them to the counter limit made every device
+   snapshot compare equal and let an older copy overwrite a newer one. */
+const syncStamp = v => Math.max(0, Math.min(864e13, Math.round(+v || 0)));
 const syncText = (v, n = 200) => String(v == null ? '' : v).slice(0, n);
 /* Listening stats are owned by one device each, so sync keeps the newest
    snapshot per device id instead of adding counters together. */
@@ -1574,7 +1578,7 @@ function cleanListening(v) {
     if (!d || typeof d !== 'object') continue;
     const key = syncText(id, 64).replace(/[^A-Za-z0-9_.:-]/g, '');
     if (!key) continue;
-    const dev = { name: syncText(d.name, 60) || 'Device', updatedAt: syncNum(d.updatedAt), days: {}, years: {}, daily: {} };
+    const dev = { name: syncText(d.name, 60) || 'Device', updatedAt: syncStamp(d.updatedAt), days: {}, years: {}, daily: {} };
     for (const [day, sec] of Object.entries(d.days || {}).slice(0, 800)) if (/^\d{4}-\d{2}-\d{2}$/.test(day)) dev.days[day] = syncNum(sec);
     for (const [day, b] of Object.entries(d.daily || {}).slice(0, 800)) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !b || typeof b !== 'object') continue;
@@ -1602,6 +1606,15 @@ function cleanListening(v) {
   }
   return out;
 }
+/* Older libraries stored timestamps clamped to 1e12, so they cannot be told
+   apart by time. When two snapshots look equally recent, keep the one with
+   more listening time instead of discarding the phone's fuller history. */
+const listeningWeight = d => {
+  let n = 0;
+  for (const sec of Object.values((d && d.days) || {})) n += +sec || 0;
+  for (const b of Object.values((d && d.years) || {})) n += (+(b && b.seconds) || 0) * 2;
+  return n;
+};
 function mergeListening(cur, incoming) {
   const out = { v: 1, devices: {} };
   for (const src of [cur, incoming]) {
@@ -1609,7 +1622,9 @@ function mergeListening(cur, incoming) {
     for (const [id, d] of Object.entries(src.devices)) {
       if (!d || typeof d !== 'object') continue;
       const have = out.devices[id];
-      if (!have || syncNum(d.updatedAt) >= syncNum(have.updatedAt)) out.devices[id] = d;
+      if (!have) { out.devices[id] = d; continue; }
+      const at = syncStamp(d.updatedAt), old = syncStamp(have.updatedAt);
+      if (at > old || (at === old && listeningWeight(d) >= listeningWeight(have))) out.devices[id] = d;
     }
   }
   return out;
@@ -2083,6 +2098,21 @@ async function syncHostRequest(req, res) {
     let b = {}; try { b = JSON.parse((await body(req, 2e5)).toString() || '{}'); } catch {}
     return syncSend(res, 200, syncNowHandle(b));
   }
+  /* Listening stats are tiny and change while a guest plays, so they travel on
+     their own path. That lets a paired phone keep the recap current without
+     sending its whole library every time. */
+  if (u.pathname === '/api/sync/listening') {
+    if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
+    if (req.method === 'GET') return syncSend(res, 200, { ok: true, rev: +sync.rev || 0, updatedAt: stateStamp(), listening: readSyncLibrary().listening });
+    if (req.method !== 'PUT') return syncSend(res, 405, { error: 'Method not allowed' });
+    let incoming = {};
+    try { incoming = JSON.parse((await body(req, 4e6)).toString() || '{}'); } catch { throw httpErr(400, 'Bad listening JSON'); }
+    const listening = mergeListeningIntoState(incoming.listening || incoming);
+    sync.rev = (+sync.rev || 0) + 1;
+    sync.lastSync = Date.now();
+    syncSave();
+    return syncSend(res, 200, { ok: true, rev: sync.rev, updatedAt: stateStamp(), listening });
+  }
   if (u.pathname !== '/api/sync/library') return syncSend(res, 404, { error: 'Not found' });
   if (!syncCodeOk(req)) return syncSend(res, 401, { error: 'That pairing code is not right' });
   if (req.method === 'GET') {
@@ -2292,6 +2322,33 @@ async function pushSync() {
   syncSave();
   return syncStatus();
 }
+/* Listening is merged into the saved state instead of being replaced, so a
+   device that saves its full state (and has not seen a phone's newest stats
+   yet) cannot erase them. */
+function mergeListeningIntoState(listening) {
+  const state = readJSON('state.json', {}) || {};
+  state.listening = mergeListening(cleanListening(state.listening), cleanListening(listening));
+  writeJSON('state.json', state);
+  folderWrite();
+  return state.listening;
+}
+/* Guest side of the listening-only sync: send this device's own snapshot and
+   take back everything the host has collected from every device. */
+async function pushListeningSync(input = {}) {
+  if (sync.role !== 'guest' || !sync.hostUrl) throw httpErr(400, 'This device is not connected to a host');
+  const listening = mergeListeningIntoState(input.listening || readSyncLibrary().listening);
+  const remote = await syncRemote(sync.hostUrl, sync.code, '/api/sync/listening', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listening, device: os.hostname() }),
+  }, 9000);
+  if (remote.listening) mergeListeningIntoState(remote.listening);
+  sync.rev = +remote.rev || 0;
+  sync.remoteUpdatedAt = +remote.updatedAt || 0;
+  sync.lastSync = Date.now();
+  syncLastError = '';
+  syncSave();
+  return { ...syncStatus(), listening: readSyncLibrary().listening };
+}
 const hostMergeSources = () => [syncKeepHost, ...[...syncGuestSnaps.values()].map(x => x.lib)].filter(Boolean);
 /* Merge is available on both ends. A guest combines its library with the
    host's and saves the result on both. A host combines the copy it had before
@@ -2431,7 +2488,16 @@ async function api(req,res,u,p){
 
   if(p==='/api/state'){
     if(m==='GET') return json(res,readJSON('state.json',null));
-    if(m==='PUT'){writeJSON('state.json',await parse(25e6));folderWrite();return json(res,{ok:true});}
+    if(m==='PUT'){
+      const v=await parse(25e6)||{};
+      /* The interface saves its whole state on a timer. Keep listening data
+         this copy has not seen yet instead of letting that save remove it. */
+      if(v.listening&&typeof v.listening==='object'){
+        const prev=readJSON('state.json',null);
+        if(prev&&prev.listening&&typeof prev.listening==='object') v.listening=mergeListening(cleanListening(v.listening),cleanListening(prev.listening));
+      }
+      writeJSON('state.json',v);folderWrite();return json(res,{ok:true});
+    }
   }
 
   if(p==='/api/update/status'&&m==='GET') return json(res,require('./updater').status());
@@ -2467,6 +2533,7 @@ async function api(req,res,u,p){
   if(m==='POST'&&p==='/api/sync/push') return json(res,await pushSync());
   if(m==='POST'&&p==='/api/sync/merge/preview') return json(res,await previewSync());
   if(m==='POST'&&p==='/api/sync/merge') return json(res,await mergeSync(await parse()));
+  if(m==='POST'&&p==='/api/sync/listening') return json(res,await pushListeningSync(await parse()));
   if(m==='POST'&&p==='/api/sync/disconnect') return json(res,await disconnectSync());
 
   if(m==='POST'&&p==='/api/cover'){
